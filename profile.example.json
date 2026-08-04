@@ -1,0 +1,35 @@
+{
+  "full_name": "Jane Doe",
+  "location": "Warsaw, Poland",
+  "email": "jane.doe@example.com",
+  "phone": "+48 000 000 000",
+  "linkedin_url": "https://linkedin.com/in/janedoe",
+  "github_url": "https://github.com/janedoe",
+  "summary": "Senior Backend Engineer with 10+ years of experience building PHP/Symfony applications in production environments.",
+  "languages": "English (B2), Polish (Native)",
+  "skills": [
+    {"name": "PHP", "category": "language"},
+    {"name": "Symfony", "category": "framework"},
+    {"name": "MySQL", "category": "tool"},
+    {"name": "Docker", "category": "tool"}
+  ],
+  "experiences": [
+    {
+      "title": "Senior PHP Developer",
+      "company": "Example Corp",
+      "location": "Remote",
+      "start_date": "2020-01-01",
+      "end_date": null,
+      "highlights": "Designed and implemented microservice architecture.\nMentored junior developers and led code reviews."
+    }
+  ],
+  "educations": [
+    {
+      "institution": "Example Institute of Technology",
+      "degree": "Bachelor's Degree",
+      "field": "Computer Science",
+      "start_date": "2005-09-01",
+      "end_date": "2009-06-01"
+    }
+  ]
+}

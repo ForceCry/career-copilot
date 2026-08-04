@@ -1,13 +1,21 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from sqlmodel import Session, select
 
 from .ingestion.pipeline import fetch_all
 from .ingestion.sources.adzuna import AdzunaSource
 from .ingestion.sources.arbeitnow import ArbeitnowSource
 from .ingestion.sources.justjoinit import JustJoinItSource
+from .storage.db import get_session, init_db
+from .storage.models import Profile
 
 app = FastAPI(title="career-copilot")
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 
 def _configured_sources(include_slow_sources: bool) -> list:
@@ -37,3 +45,43 @@ def vacancies(
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
     results = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
     return {"count": len(results), "vacancies": [v.model_dump() for v in results]}
+
+
+@app.get("/profile")
+def get_profile(session: Session = Depends(get_session)):
+    profile = session.exec(select(Profile)).first()
+    if not profile:
+        raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
+
+    return {
+        "full_name": profile.full_name,
+        "location": profile.location,
+        "email": profile.email,
+        "phone": profile.phone,
+        "linkedin_url": profile.linkedin_url,
+        "github_url": profile.github_url,
+        "summary": profile.summary,
+        "languages": profile.languages,
+        "skills": [{"name": s.name, "category": s.category} for s in profile.skills],
+        "experiences": [
+            {
+                "title": e.title,
+                "company": e.company,
+                "location": e.location,
+                "start_date": e.start_date,
+                "end_date": e.end_date,
+                "highlights": e.highlights,
+            }
+            for e in profile.experiences
+        ],
+        "educations": [
+            {
+                "institution": ed.institution,
+                "degree": ed.degree,
+                "field": ed.field,
+                "start_date": ed.start_date,
+                "end_date": ed.end_date,
+            }
+            for ed in profile.educations
+        ],
+    }
