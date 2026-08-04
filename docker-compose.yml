@@ -7,4 +7,9 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      # Read-only: the container can use the OAuth session to call `claude`,
+      # but can't write to or corrupt it. Both paths needed - .claude.json
+      # is a separate top-level config file, not inside the .claude/ dir.
+      - ${HOME}/.claude:/root/.claude:ro
+      - ${HOME}/.claude.json:/root/.claude.json:ro
     restart: unless-stopped

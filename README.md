@@ -22,6 +22,23 @@ sources behind one interface before anything else gets built on top.
   (`what`) and location (`where`), with `pl` as a supported country code for
   Poland. This is the primary source once keys are in place.
 
+## Matching
+
+`GET /recommendations` runs a two-stage pipeline: a free, deterministic
+skill-overlap heuristic ranks every fetched vacancy first, then
+`llm_rerank_top_n=N` (opt-in, 0 by default) sends only the top N of that
+shortlist to an LLM for semantic reasoning — seniority fit, overqualification
+risk, gaps a keyword match can't see.
+
+The LLM call goes through the local `claude` CLI (`claude -p ...`), not the
+Anthropic API — it reuses your already-authenticated Claude Code session, no
+API key to manage. That means the container needs your `~/.claude` session
+mounted in (see docker-compose.yml): it's mounted read-only, but it does give
+the container the ability to *use* your real Claude Code session while
+running. If that's not something you want to grant a container, run
+`llm_rerank_top_n` locally via `.venv` instead — the Docker path works
+without it, just without the LLM rerank layer.
+
 ## Setup
 
 ### Docker (recommended)
@@ -31,6 +48,7 @@ cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 docker compose up --build
 curl http://localhost:8000/health
 curl "http://localhost:8000/vacancies?keywords=php,symfony&location=Warsaw"
+curl "http://localhost:8000/recommendations?keywords=php,symfony&location=Warsaw&llm_rerank_top_n=5"
 ```
 
 ### Local (no Docker)
