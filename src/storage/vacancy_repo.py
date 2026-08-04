@@ -29,6 +29,11 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
             existing.description = v.description
             existing.tags = ",".join(v.tags)
             existing.posted_at = v.created_at
+            existing.salary_min = v.salary_min
+            existing.salary_max = v.salary_max
+            existing.salary_currency = v.salary_currency
+            existing.salary_period = v.salary_period
+            existing.salary_is_predicted = v.salary_is_predicted
             existing.last_seen_at = now
             session.add(existing)
             updated_count += 1
@@ -45,6 +50,11 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
                     description=v.description,
                     tags=",".join(v.tags),
                     posted_at=v.created_at,
+                    salary_min=v.salary_min,
+                    salary_max=v.salary_max,
+                    salary_currency=v.salary_currency,
+                    salary_period=v.salary_period,
+                    salary_is_predicted=v.salary_is_predicted,
                     first_seen_at=now,
                     last_seen_at=now,
                 )
@@ -67,6 +77,11 @@ def _to_ingestion_vacancy(record: VacancyRecord) -> IngestionVacancy:
         description=record.description,
         tags=[t for t in record.tags.split(",") if t],
         created_at=record.posted_at,
+        salary_min=record.salary_min,
+        salary_max=record.salary_max,
+        salary_currency=record.salary_currency,
+        salary_period=record.salary_period,
+        salary_is_predicted=record.salary_is_predicted,
     )
 
 

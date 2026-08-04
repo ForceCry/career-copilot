@@ -9,6 +9,10 @@ from .base import VacancySource
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
 
+# The API doesn't return a currency field - it's implied by the country
+# endpoint. Only covers the country actually in use here.
+COUNTRY_CURRENCY = {"pl": "PLN"}
+
 
 class AdzunaSource(VacancySource):
     """Requires a free app_id/app_key from https://developer.adzuna.com/.
@@ -63,8 +67,7 @@ class AdzunaSource(VacancySource):
 
         return results
 
-    @staticmethod
-    def _to_vacancy(job: dict) -> Vacancy:
+    def _to_vacancy(self, job: dict) -> Vacancy:
         return Vacancy(
             source="adzuna",
             external_id=str(job["id"]),
@@ -76,4 +79,9 @@ class AdzunaSource(VacancySource):
             description=job.get("description", ""),
             tags=[job.get("category", {}).get("label", "")],
             created_at=job.get("created"),
+            salary_min=job.get("salary_min"),
+            salary_max=job.get("salary_max"),
+            salary_currency=COUNTRY_CURRENCY.get(self.country, ""),
+            salary_period="year",  # Adzuna's convention: annualized estimates
+            salary_is_predicted=str(job.get("salary_is_predicted")) == "1",
         )

@@ -86,6 +86,12 @@ class JustJoinItSource(VacancySource):
         location_parts = [address.get("addressLocality", ""), address.get("addressCountry", "")]
         location = ", ".join(p for p in location_parts if p)
 
+        base_salary = job_posting.get("baseSalary", {})
+        salary_value = base_salary.get("value", {})
+        salary_period = {"MONTH": "month", "YEAR": "year", "HOUR": "hour"}.get(
+            salary_value.get("unitText", ""), ""
+        )
+
         return Vacancy(
             source="justjoinit",
             external_id=url.rstrip("/").rsplit("/", 1)[-1],
@@ -97,4 +103,8 @@ class JustJoinItSource(VacancySource):
             description=job_posting.get("description", ""),
             tags=[],
             created_at=job_posting.get("datePosted"),
+            salary_min=salary_value.get("minValue"),
+            salary_max=salary_value.get("maxValue"),
+            salary_currency=base_salary.get("currency", ""),
+            salary_period=salary_period,
         )

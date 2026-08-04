@@ -93,5 +93,10 @@ class VacancyRecord(SQLModel, table=True):
     description: str = ""
     tags: str = ""  # comma-separated - SQLite has no native array type
     posted_at: Optional[datetime] = None  # from the source, if it provides one
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    salary_currency: str = ""
+    salary_period: str = ""  # "year" | "month" | "hour" | ""
+    salary_is_predicted: bool = False
     first_seen_at: datetime = Field(default_factory=datetime.utcnow)
     last_seen_at: datetime = Field(default_factory=datetime.utcnow)

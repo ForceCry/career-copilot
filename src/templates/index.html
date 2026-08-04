@@ -146,6 +146,13 @@
       <div>
         <div class="rec-title"><a href="{{ rec.url }}" target="_blank" rel="noopener">{{ rec.title }}</a></div>
         <div class="rec-meta">{{ rec.company }}</div>
+        {% if rec.salary_min %}
+        <div class="rec-meta">
+          {{ "{:,.0f}".format(rec.salary_min) }}&ndash;{{ "{:,.0f}".format(rec.salary_max) }}
+          {{ rec.salary_currency }}{% if rec.salary_period %}/{{ rec.salary_period }}{% endif %}
+          {% if rec.salary_is_predicted %}(estimated){% endif %}
+        </div>
+        {% endif %}
       </div>
       <div class="score {% if rec.score >= 70 %}score-high{% elif rec.score >= 40 %}score-mid{% else %}score-low{% endif %}">
         {{ rec.score }}

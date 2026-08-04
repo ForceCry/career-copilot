@@ -116,6 +116,11 @@ def index(
                 "url": m.vacancy_url,
                 "score": m.score,
                 "description": vacancy.description if vacancy else "",
+                "salary_min": vacancy.salary_min if vacancy else None,
+                "salary_max": vacancy.salary_max if vacancy else None,
+                "salary_currency": vacancy.salary_currency if vacancy else "",
+                "salary_period": vacancy.salary_period if vacancy else "",
+                "salary_is_predicted": vacancy.salary_is_predicted if vacancy else False,
             }
             if hasattr(m, "reasoning"):
                 item["reasoning"] = m.reasoning

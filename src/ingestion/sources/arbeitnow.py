@@ -15,6 +15,9 @@ class ArbeitnowSource(VacancySource):
     client-side, and volume for PHP/Symfony is low (~1 in 175 per page),
     so treat this as a supplementary source, not the primary one.
 
+    No salary data - confirmed live, the API's job objects simply don't
+    include a salary field, unlike Adzuna and justjoin.it.
+
     Rate limiting is real here, not theoretical: a handful of quick
     requests in a row triggered a 429 behind a Cloudflare challenge during
     testing. request_delay + get_with_retry exist because of that, not as
