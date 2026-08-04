@@ -66,7 +66,15 @@ def vacancies(
     session: Session = Depends(get_session),
 ):
     """Reads from the DB - populated by `scripts/ingest.py --source ...`,
-    not fetched live. Run that first if this comes back empty."""
+    not fetched live. Run that first if this comes back empty.
+
+    Deliberately unpaginated for now (flagged by an independent Codex
+    review) - single-user local tool, no auth, and `query_vacancies`
+    already keyword-filters server-side before this returns. Revisit
+    with an actual limit/offset if the ingested table passes ~5k rows
+    or a single response body becomes noticeably slow to render/parse;
+    below that, pagination is complexity this endpoint doesn't earn yet.
+    """
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
     source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
     results = query_vacancies(session, keyword_list, source_list)
@@ -80,15 +88,15 @@ def _compute_recommendations(
     min_score: int,
     top_k: int,
     llm_rerank_top_n: int,
-) -> tuple[list, dict[str, Vacancy]]:
+) -> tuple[list, dict[int, Vacancy]]:
     source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
     hits = vector_search(profile, k=top_k, sources=source_list)
 
     vacancies_by_id = get_vacancies_by_ids(session, [h["vacancy_id"] for h in hits])
-    by_url = {v.url: v for v in vacancies_by_id.values()}
 
     vector_matches = [
         VectorMatchResult(
+            vacancy_id=h["vacancy_id"],
             vacancy_title=h["title"],
             vacancy_company=h["company"],
             vacancy_url=h["url"],
@@ -102,11 +110,14 @@ def _compute_recommendations(
     if llm_rerank_top_n > 0:
         # LLM calls shell out to the local `claude` CLI - several seconds
         # and real cost per call - so only the top of the cheap vector
-        # search shortlist gets reranked, never the full result set.
-        shortlist = [by_url[m.vacancy_url] for m in vector_matches[:llm_rerank_top_n]]
-        return llm_rerank(shortlist, profile), by_url
+        # search shortlist gets reranked, never the full result set. Keyed
+        # by id, not url: two postings can share a url (e.g. a re-post),
+        # which previously let one silently overwrite the other in the
+        # shortlist lookup - flagged by an independent Codex review.
+        shortlist = [(m.vacancy_id, vacancies_by_id[m.vacancy_id]) for m in vector_matches[:llm_rerank_top_n]]
+        return llm_rerank(shortlist, profile), vacancies_by_id
 
-    return vector_matches, by_url
+    return vector_matches, vacancies_by_id
 
 
 @app.get("/recommendations")
@@ -120,10 +131,10 @@ def recommendations(
     # binding), so this cap is the only thing standing between "normal
     # use" and "someone scripts a loop against it."
     top_k: int = Query(20, ge=1, le=100),
-    llm_rerank_top_n: int = Query(0, ge=0, le=20),
+    llm_rerank_top_n: int = Query(0, ge=0, le=10),
     session: Session = Depends(get_session),
 ):
-    profile = session.exec(select(Profile)).first()
+    profile = session.exec(select(Profile).order_by(Profile.id)).first()
     if not profile:
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
@@ -139,21 +150,21 @@ def index(
     sources: str = "",
     min_score: int = Query(0, ge=0, le=100),
     top_k: int = Query(20, ge=1, le=100),
-    llm_rerank_top_n: int = Query(0, ge=0, le=20),
+    llm_rerank_top_n: int = Query(0, ge=0, le=10),
     session: Session = Depends(get_session),
 ):
-    profile = session.exec(select(Profile)).first()
+    profile = session.exec(select(Profile).order_by(Profile.id)).first()
     recommendations_ctx = []
     error = None
 
     if not profile:
         error = "No profile seeded yet — run scripts/seed_profile.py"
     else:
-        matches, by_url = _compute_recommendations(
+        matches, vacancies_by_id = _compute_recommendations(
             session, profile, sources, min_score, top_k, llm_rerank_top_n
         )
         for m in matches:
-            vacancy = by_url.get(m.vacancy_url)
+            vacancy = vacancies_by_id.get(m.vacancy_id)
             item = {
                 "title": m.vacancy_title,
                 "company": m.vacancy_company,
@@ -190,7 +201,7 @@ def index(
 
 @app.get("/profile")
 def get_profile(session: Session = Depends(get_session)):
-    profile = session.exec(select(Profile)).first()
+    profile = session.exec(select(Profile).order_by(Profile.id)).first()
     if not profile:
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
@@ -229,7 +240,7 @@ def get_profile(session: Session = Depends(get_session)):
 
 
 def _get_profile_or_404(session: Session) -> Profile:
-    profile = session.exec(select(Profile)).first()
+    profile = session.exec(select(Profile).order_by(Profile.id)).first()
     if not profile:
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
     return profile

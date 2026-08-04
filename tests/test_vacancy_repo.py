@@ -8,7 +8,7 @@ import pytest  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
 from src.ingestion.models import Vacancy  # noqa: E402
-from src.storage.vacancy_repo import upsert_vacancies  # noqa: E402
+from src.storage.vacancy_repo import mark_embedding_queued, upsert_vacancies  # noqa: E402
 
 
 @pytest.fixture
@@ -41,10 +41,12 @@ def test_new_vacancy_is_queued_for_embedding(session):
 
 
 def test_unchanged_reingest_is_not_requeued(session):
-    upsert_vacancies(session, [_vacancy()])
+    _, _, first_ids = upsert_vacancies(session, [_vacancy()])
+    mark_embedding_queued(session, first_ids)  # broker confirmed the publish
 
     # Same source+external_id, identical title/description - a routine
-    # re-ingest of a still-open posting.
+    # re-ingest of a still-open posting whose embedding was already
+    # confirmed queued.
     new_count, updated_count, to_embed_ids = upsert_vacancies(session, [_vacancy()])
 
     assert new_count == 0
@@ -71,7 +73,8 @@ def test_edited_posting_is_requeued_for_embedding(session):
 def test_salary_only_change_does_not_requeue(session):
     """Only title/description drive the embedding text - a salary or
     location edit alone isn't worth an extra TEI/ES round trip."""
-    upsert_vacancies(session, [_vacancy()])
+    _, _, first_ids = upsert_vacancies(session, [_vacancy()])
+    mark_embedding_queued(session, first_ids)
 
     new_count, updated_count, to_embed_ids = upsert_vacancies(
         session, [_vacancy(location="Krakow")]
@@ -79,3 +82,31 @@ def test_salary_only_change_does_not_requeue(session):
 
     assert updated_count == 1
     assert to_embed_ids == []
+
+
+def test_never_confirmed_queued_vacancy_is_requeued_on_reingest(session):
+    """Regression: an independent Codex review found that a publish which
+    silently failed (RabbitMQ down, message unroutable, etc.) left a
+    vacancy's embedding forever un-queued, since only genuinely new or
+    content-changed ids were ever queued - an unconfirmed one looked
+    identical to a confirmed one on the next ingest. embedding_queued_at
+    staying NULL is what makes it get picked back up."""
+    _, _, first_ids = upsert_vacancies(session, [_vacancy()])
+    assert first_ids  # never confirmed - mark_embedding_queued not called
+
+    new_count, updated_count, to_embed_ids = upsert_vacancies(session, [_vacancy()])
+
+    assert new_count == 0
+    assert updated_count == 1
+    assert to_embed_ids == first_ids
+
+
+def test_confirmed_then_edited_vacancy_is_requeued_once(session):
+    _, _, first_ids = upsert_vacancies(session, [_vacancy()])
+    mark_embedding_queued(session, first_ids)
+
+    _, _, to_embed_ids = upsert_vacancies(
+        session, [_vacancy(title="Senior PHP Developer (updated)")]
+    )
+
+    assert to_embed_ids == first_ids

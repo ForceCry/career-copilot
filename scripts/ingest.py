@@ -34,7 +34,7 @@ from src.ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
 from src.ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
 from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
 from src.storage.db import engine, init_db  # noqa: E402
-from src.storage.vacancy_repo import upsert_vacancies  # noqa: E402
+from src.storage.vacancy_repo import mark_embedding_queued, upsert_vacancies  # noqa: E402
 
 SOURCES = {
     "adzuna": AdzunaSource,
@@ -63,16 +63,25 @@ def main() -> None:
     print(f"[{args.source}] upserted: {new_count} new, {updated_count} refreshed")
 
     try:
-        publish_vacancy_ids(to_embed_ids)
-        print(f"[{args.source}] queued {len(to_embed_ids)} vacancies for embedding")
+        confirmed_ids = publish_vacancy_ids(to_embed_ids)
     except Exception as exc:
-        # The MySQL upsert above already committed - these vacancies are
-        # now "existing" for every future ingest run, so they'll never
-        # get queued again on their own if this fails silently. Caught by
-        # an independent Codex review: don't let that happen quietly.
+        # A total failure to even talk to RabbitMQ (vs. individual
+        # messages not confirming) - nothing got marked queued, so the
+        # next ingest run naturally retries everything in to_embed_ids on
+        # its own (see vacancy_repo.upsert_vacancies: embedding_queued_at
+        # stays NULL for all of them). Still surfaced loudly rather than
+        # swallowed, since a persistently broken RabbitMQ needs attention.
         print(f"[{args.source}] FAILED to queue {len(to_embed_ids)} vacancies for embedding: {exc!r}")
-        print(f"[{args.source}] run scripts/backfill_embeddings.py to recover - it queues everything, not just new ids")
         raise
+
+    if confirmed_ids:
+        with Session(engine) as session:
+            mark_embedding_queued(session, confirmed_ids)
+
+    unconfirmed = len(to_embed_ids) - len(confirmed_ids)
+    print(f"[{args.source}] queued {len(confirmed_ids)} vacancies for embedding" + (
+        f" ({unconfirmed} not confirmed by the broker - will retry on the next ingest)" if unconfirmed else ""
+    ))
 
 
 if __name__ == "__main__":

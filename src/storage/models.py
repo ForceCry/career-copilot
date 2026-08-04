@@ -101,3 +101,12 @@ class VacancyRecord(SQLModel, table=True):
     salary_is_predicted: bool = False
     first_seen_at: datetime = Field(default_factory=datetime.utcnow)
     last_seen_at: datetime = Field(default_factory=datetime.utcnow)
+    # NULL means "not confirmed queued for embedding yet" - set only after
+    # RabbitMQ actually confirms receiving the publish (see
+    # messaging/rabbitmq.py), not just after upsert_vacancies decides it
+    # should be queued. A publish that silently fails (flagged by an
+    # independent Codex review: DB commit and queue publish were separate,
+    # non-recoverable steps) leaves this NULL, so the next ingest run -
+    # even an otherwise-unchanged one - naturally re-queues it instead of
+    # requiring someone to remember to run the backfill script.
+    embedding_queued_at: Optional[datetime] = None

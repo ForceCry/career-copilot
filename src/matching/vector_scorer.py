@@ -11,6 +11,7 @@ class VectorMatchResult(BaseModel):
     than the old keyword-overlap score, not a like-for-like number, but
     the same visual scale."""
 
+    vacancy_id: int
     vacancy_title: str
     vacancy_company: str
     vacancy_url: str

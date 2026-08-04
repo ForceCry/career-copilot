@@ -53,7 +53,11 @@ services:
     restart: unless-stopped
 
   mysql:
-    image: mysql:8
+    # Pinned rather than the `8` major-version tag: an independent Codex
+    # review flagged that a floating tag means "docker compose pull" can
+    # silently jump minor versions on a rebuild, with no signal that it
+    # happened. Bump deliberately when there's a reason to.
+    image: mysql:8.4.11
     ports:
       - "127.0.0.1:3306:3306"  # exposed for local (non-Docker) dev too, not just the api container
     environment:
@@ -91,7 +95,11 @@ services:
     restart: unless-stopped
 
   rabbitmq:
-    image: rabbitmq:3-management
+    # Pinned to the last 3.x patch rather than the floating `3-management`
+    # tag (same reasoning as mysql above) - deliberately not jumping to
+    # 4.x here since that's a real major-version upgrade to evaluate on
+    # its own, not something that should ride along with a pin.
+    image: rabbitmq:3.13.7-management
     # Enables the built-in Prometheus plugin (metrics on :15692) before
     # starting the broker - not on by default even in the -management image.
     command: >
@@ -114,7 +122,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.2
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
@@ -126,7 +134,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.2
     ports:
       - "127.0.0.1:3000:3000"
     environment:

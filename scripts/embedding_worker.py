@@ -13,11 +13,14 @@ sys.path.insert(0, str(ROOT))
 
 import time
 
+import httpx
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
+from elasticsearch.exceptions import TransportError as ESTransportError  # noqa: E402
 from prometheus_client import Counter, Histogram, start_http_server  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
 from sqlmodel import Session  # noqa: E402
 
 from src.messaging.rabbitmq import VACANCY_EMBED_QUEUE, get_connection  # noqa: E402
@@ -25,11 +28,21 @@ from src.search.indexer import index_vacancy  # noqa: E402
 from src.storage.db import engine  # noqa: E402
 
 METRICS_PORT = 9100
+TRANSIENT_RETRY_BACKOFF_SECONDS = 5.0
+
+# Distinguishes "this dependency is temporarily down" from "this message
+# is permanently bad" - an independent Codex review pointed out that the
+# original blanket ack-on-any-exception fix (needed to stop a poison
+# message from blocking the queue forever) went too far the other way:
+# it also acked messages that failed only because TEI/ES/MySQL happened
+# to be down at that moment, permanently losing them instead of retrying
+# once the dependency recovers.
+TRANSIENT_EXCEPTIONS = (httpx.TransportError, ESTransportError, OperationalError)
 
 VACANCIES_PROCESSED = Counter(
     "embedding_worker_vacancies_processed_total",
     "Vacancies consumed from vacancy.embed",
-    ["status"],  # "indexed" | "not_found" | "failed"
+    ["status"],  # "indexed" | "not_found" | "failed" | "retrying"
 )
 PROCESSING_DURATION = Histogram(
     "embedding_worker_processing_seconds",
@@ -54,23 +67,30 @@ def main() -> None:
                 found = index_vacancy(session, vacancy_id)
             status = "indexed" if found else "not_found"
             print(f"[embedding-worker] vacancy {vacancy_id}: {status}", flush=True)
-        except Exception as exc:
-            # A message that always fails to process (bad body, TEI/ES
-            # down, malformed data) must not be allowed to block every
-            # message behind it forever. Without this, an unhandled
-            # exception here crashes the process; RabbitMQ redelivers the
-            # same unacked message on reconnect, and prefetch_count=1
-            # means nothing else gets consumed until it's gone - a real
-            # poison-message failure mode, not a hypothetical one, caught
-            # by an independent Codex review of this exact code. Acking
-            # and moving on trades "silently drop this one" for "stay
-            # alive" - the right tradeoff for a queue with no dead-letter
-            # exchange configured yet.
-            status = "failed"
-            print(f"[embedding-worker] message failed, acking and continuing: {exc!r}", flush=True)
-        finally:
             PROCESSING_DURATION.observe(time.monotonic() - start)
             VACANCIES_PROCESSED.labels(status=status).inc()
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        except TRANSIENT_EXCEPTIONS as exc:
+            # TEI/ES/MySQL being temporarily unreachable isn't the
+            # message's fault - nack + requeue so it's retried once the
+            # dependency is back, instead of being permanently dropped.
+            # A short sleep avoids hammering an already-struggling
+            # dependency with an immediate retry loop.
+            PROCESSING_DURATION.observe(time.monotonic() - start)
+            VACANCIES_PROCESSED.labels(status="retrying").inc()
+            print(f"[embedding-worker] transient failure, will retry: {exc!r}", flush=True)
+            time.sleep(TRANSIENT_RETRY_BACKOFF_SECONDS)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+
+        except Exception as exc:
+            # Genuinely bad data (malformed body, a posting that will
+            # never pass validation) - retrying changes nothing, so ack
+            # and move on rather than block every message behind it
+            # forever under prefetch_count=1.
+            PROCESSING_DURATION.observe(time.monotonic() - start)
+            VACANCIES_PROCESSED.labels(status="failed").inc()
+            print(f"[embedding-worker] message failed, acking and continuing: {exc!r}", flush=True)
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     channel.basic_consume(queue=VACANCY_EMBED_QUEUE, on_message_callback=on_message)

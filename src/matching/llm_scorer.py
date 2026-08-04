@@ -1,6 +1,7 @@
 import json
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -24,8 +25,17 @@ SYSTEM_PROMPT = (
 
 JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
+# FastAPI runs sync endpoints in a threadpool, so concurrent HTTP requests
+# each rerank-ing a shortlist would otherwise spawn unboundedly many
+# `claude` subprocesses at once - real cost and real CPU/RAM per call,
+# with no auth in front of this single-user tool to limit request rate.
+# Caps total concurrent LLM calls process-wide rather than per-request.
+# Flagged by an independent Codex review.
+_CONCURRENCY_LIMIT = threading.Semaphore(2)
+
 
 class LlmMatchResult(BaseModel):
+    vacancy_id: int
     vacancy_title: str
     vacancy_company: str
     vacancy_url: str
@@ -62,23 +72,24 @@ def _extract_json(raw: str) -> dict:
 
 
 def llm_score_vacancy(
-    vacancy: Vacancy, profile: Profile, model: str = "haiku", timeout: float = 30.0
+    vacancy_id: int, vacancy: Vacancy, profile: Profile, model: str = "haiku", timeout: float = 30.0
 ) -> LlmMatchResult | None:
     prompt = _build_prompt(vacancy, profile)
 
-    process = subprocess.run(
-        [
-            "claude", "-p", prompt,
-            "--output-format", "json",
-            "--model", model,
-            "--allowedTools", "",
-            "--system-prompt", SYSTEM_PROMPT,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=PROJECT_ROOT,
-    )
+    with _CONCURRENCY_LIMIT:
+        process = subprocess.run(
+            [
+                "claude", "-p", prompt,
+                "--output-format", "json",
+                "--model", model,
+                "--allowedTools", "",
+                "--system-prompt", SYSTEM_PROMPT,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=PROJECT_ROOT,
+        )
     if process.returncode != 0:
         return None
 
@@ -92,6 +103,7 @@ def llm_score_vacancy(
         return None
 
     return LlmMatchResult(
+        vacancy_id=vacancy_id,
         vacancy_title=vacancy.title,
         vacancy_company=vacancy.company,
         vacancy_url=vacancy.url,
@@ -101,13 +113,18 @@ def llm_score_vacancy(
     )
 
 
-def llm_rerank(vacancies: list[Vacancy], profile: Profile, top_n: int = 10) -> list[LlmMatchResult]:
+def llm_rerank(
+    vacancies: list[tuple[int, Vacancy]], profile: Profile, top_n: int = 10
+) -> list[LlmMatchResult]:
     """Two-stage pipeline: the heuristic scorer already ordered `vacancies`
     cheaply, so only the top_n shortlist pays for an LLM call - a rerank
-    step, not a replacement for the first pass."""
+    step, not a replacement for the first pass. Takes (id, Vacancy) pairs
+    rather than bare Vacancy objects since two postings can share a url
+    (e.g. a re-post on the same board) - keying by id instead avoids
+    conflating them, flagged by an independent Codex review."""
     results = []
-    for vacancy in vacancies[:top_n]:
-        result = llm_score_vacancy(vacancy, profile)
+    for vacancy_id, vacancy in vacancies[:top_n]:
+        result = llm_score_vacancy(vacancy_id, vacancy, profile)
         if result:
             results.append(result)
     return sorted(results, key=lambda r: r.score, reverse=True)

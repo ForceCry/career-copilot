@@ -5,9 +5,13 @@ WORKDIR /app
 # Node.js + the claude CLI: the LLM rerank layer shells out to `claude -p`
 # using the OAuth session mounted in at runtime (see docker-compose.yml),
 # not an API key.
+# Pinned rather than @latest - an independent Codex review flagged that
+# an unpinned global install means every image rebuild can silently pull
+# in a newer claude-code CLI with different flags/output-format behavior
+# than what this codebase was written against. Bump deliberately.
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code
+    && npm install -g @anthropic-ai/claude-code@2.1.221
 
 # Build context is the parent Work/ directory (see docker-compose.yml),
 # not career-copilot/ itself - needed to reach these sibling library

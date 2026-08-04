@@ -1,9 +1,14 @@
 """One-off backfill: queue every vacancy currently in MySQL for embedding,
 regardless of whether it's already indexed in Elasticsearch.
 
-Needed because ingest.py only queues genuinely *new* vacancies (see its
-docstring) - vacancies ingested before the RabbitMQ wiring existed, or
-ones indexed under an old embedding, never get (re-)queued on their own.
+Mainly useful for a schema/model change that needs everything
+re-embedded (e.g. switching embedding models), or a bulk recovery after
+an extended RabbitMQ outage. For the routine case - a vacancy that
+failed to get confirmed-queued on a normal ingest run - the next
+`scripts/ingest.py` run for that source picks it back up on its own
+(see storage/vacancy_repo.py's embedding_queued_at tracking), no manual
+step needed.
+
 Safe to run anytime: indexing is idempotent (ES doc id = vacancy id, so
 re-embedding overwrites rather than duplicates).
 
@@ -24,10 +29,19 @@ from sqlmodel import Session, select  # noqa: E402
 from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
 from src.storage.db import engine  # noqa: E402
 from src.storage.models import VacancyRecord  # noqa: E402
+from src.storage.vacancy_repo import mark_embedding_queued  # noqa: E402
 
 if __name__ == "__main__":
     with Session(engine) as session:
         ids = session.exec(select(VacancyRecord.id)).all()
 
-    publish_vacancy_ids(list(ids))
-    print(f"Queued {len(ids)} vacancies for (re-)embedding")
+    confirmed_ids = publish_vacancy_ids(list(ids))
+
+    if confirmed_ids:
+        with Session(engine) as session:
+            mark_embedding_queued(session, confirmed_ids)
+
+    unconfirmed = len(ids) - len(confirmed_ids)
+    print(f"Queued {len(confirmed_ids)} vacancies for (re-)embedding" + (
+        f" ({unconfirmed} not confirmed by the broker - rerun to retry those)" if unconfirmed else ""
+    ))

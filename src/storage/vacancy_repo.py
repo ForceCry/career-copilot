@@ -31,7 +31,9 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
         ).first()
 
         if existing:
-            if existing.title != v.title or existing.description != v.description:
+            content_changed = existing.title != v.title or existing.description != v.description
+            never_confirmed_queued = existing.embedding_queued_at is None
+            if content_changed or never_confirmed_queued:
                 changed_ids.append(existing.id)
             existing.title = v.title
             existing.company = v.company
@@ -77,6 +79,24 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
     to_embed_ids = [r.id for r in new_records] + changed_ids
     session.commit()
     return new_count, updated_count, to_embed_ids
+
+
+def mark_embedding_queued(session: Session, vacancy_ids: list[int]) -> None:
+    """Called only with ids RabbitMQ actually confirmed receiving (see
+    messaging.rabbitmq.publish_vacancy_ids) - not with everything
+    upsert_vacancies decided should be queued. That distinction is the
+    whole point: a partial publish failure leaves exactly the unconfirmed
+    ids' embedding_queued_at NULL, so the next ingest run picks them back
+    up on its own, without needing a separate outbox table or a manually
+    remembered backfill for the common case."""
+    if not vacancy_ids:
+        return
+    now = datetime.utcnow()
+    records = session.exec(select(VacancyRecord).where(VacancyRecord.id.in_(vacancy_ids))).all()
+    for record in records:
+        record.embedding_queued_at = now
+        session.add(record)
+    session.commit()
 
 
 def _to_ingestion_vacancy(record: VacancyRecord) -> IngestionVacancy:
