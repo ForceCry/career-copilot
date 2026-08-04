@@ -17,10 +17,34 @@ sources behind one interface before anything else gets built on top.
   `search`/`tags` query params are accepted but ignored server-side, so
   filtering happens client-side after fetching. PHP/Symfony volume is low
   (roughly 1 relevant listing per 175), so this is a supplementary source.
+  Rate-limits hard (hit a real 429 behind a Cloudflare challenge in
+  testing) - `ArbeitnowSource` paces requests accordingly.
 - **Adzuna** — needs a free `app_id`/`app_key` from
   https://developer.adzuna.com/. Real server-side filtering by keyword
   (`what`) and location (`where`), with `pl` as a supported country code for
   Poland. This is the primary source once keys are in place.
+- **justjoin.it** — no partner API (their `/api/` is a private frontend
+  backend, and `robots.txt` explicitly disallows it). Reads their published
+  sitemap for URLs and the schema.org `JobPosting` JSON-LD each job page
+  embeds for search engines. Slow (one full page fetch per match) - meant
+  to run occasionally, not on every request.
+
+Nothing above is fetched live on a request anymore. `scripts/ingest.py
+--source <name>` pulls from one source and upserts into the DB - each
+source is its own command deliberately, since they have very different
+cost/speed profiles and shouldn't share a schedule:
+
+```bash
+.venv/bin/python scripts/ingest.py --source adzuna
+.venv/bin/python scripts/ingest.py --source arbeitnow
+.venv/bin/python scripts/ingest.py --source justjoinit  # slow, run less often
+```
+
+Works the same way inside the container: `docker compose exec api python
+scripts/ingest.py --source adzuna`. Wire these into cron at whatever
+per-source cadence makes sense - see the script's docstring for an example.
+`GET /vacancies` and `GET /recommendations` read whatever's in the DB; if
+they come back empty, nothing has been ingested yet.
 
 ## Matching
 
@@ -45,10 +69,11 @@ without it, just without the LLM rerank layer.
 
 ```bash
 cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
-docker compose up --build
+docker compose up --build -d
+docker compose exec api python scripts/ingest.py --source adzuna
 curl http://localhost:8000/health
-curl "http://localhost:8000/vacancies?keywords=php,symfony&location=Warsaw"
-curl "http://localhost:8000/recommendations?keywords=php,symfony&location=Warsaw&llm_rerank_top_n=5"
+curl "http://localhost:8000/vacancies?keywords=php,symfony"
+curl "http://localhost:8000/recommendations?keywords=php,symfony&llm_rerank_top_n=5"
 ```
 
 ### Local (no Docker)

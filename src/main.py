@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,14 +12,11 @@ load_dotenv()  # docker-compose injects env vars directly via env_file; local
 from .documents.llm_writer import generate_cover_letter, suggest_resume_tailoring  # noqa: E402
 from .documents.resume import render_resume_html  # noqa: E402
 from .ingestion.models import Vacancy  # noqa: E402
-from .ingestion.pipeline import fetch_all  # noqa: E402
-from .ingestion.sources.adzuna import AdzunaSource  # noqa: E402
-from .ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
-from .ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
 from .matching.engine import score_vacancies  # noqa: E402
 from .matching.llm_scorer import llm_rerank  # noqa: E402
 from .storage.db import get_session, init_db  # noqa: E402
 from .storage.models import Profile, ResumeVersion  # noqa: E402
+from .storage.vacancy_repo import query_vacancies  # noqa: E402
 
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -31,19 +27,6 @@ def on_startup():
     init_db()
 
 
-def _configured_sources(include_slow_sources: bool) -> list:
-    sources = [ArbeitnowSource(max_pages=2)]
-    if os.environ.get("ADZUNA_APP_ID") and os.environ.get("ADZUNA_APP_KEY"):
-        sources.append(AdzunaSource())
-    if include_slow_sources:
-        # JustJoinItSource fetches one full job page per match (no bulk
-        # search API for this source, see its docstring) - tens of seconds
-        # and tens of MB per call. Fine for a scheduled ingestion job,
-        # too slow to run on every live request by default.
-        sources.append(JustJoinItSource())
-    return sources
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -52,27 +35,31 @@ def health():
 @app.get("/vacancies")
 def vacancies(
     keywords: str = "php,symfony,backend",
-    location: str = "Warsaw",
-    include_slow_sources: bool = False,
+    sources: str = "",
+    session: Session = Depends(get_session),
 ):
+    """Reads from the DB - populated by `scripts/ingest.py --source ...`,
+    not fetched live. Run that first if this comes back empty."""
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
-    results = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
+    source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
+    results = query_vacancies(session, keyword_list, source_list)
     return {"count": len(results), "vacancies": [v.model_dump() for v in results]}
 
 
 def _compute_recommendations(
+    session: Session,
     profile: Profile,
     keywords: str,
-    location: str,
-    include_slow_sources: bool,
+    sources: str,
     min_score: int,
     llm_rerank_top_n: int,
 ) -> tuple[list, dict[str, Vacancy]]:
     profile_skills = [s.name for s in profile.skills]
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
-    fetched = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
-    by_url = {v.url: v for v in fetched}
-    heuristic_matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
+    source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
+    stored = query_vacancies(session, keyword_list, source_list)
+    by_url = {v.url: v for v in stored}
+    heuristic_matches = [m for m in score_vacancies(stored, profile_skills) if m.score >= min_score]
 
     if llm_rerank_top_n > 0:
         # LLM calls shell out to the local `claude` CLI - several seconds
@@ -87,8 +74,7 @@ def _compute_recommendations(
 @app.get("/recommendations")
 def recommendations(
     keywords: str = "php,symfony,backend",
-    location: str = "Warsaw",
-    include_slow_sources: bool = False,
+    sources: str = "",
     min_score: int = 0,
     llm_rerank_top_n: int = 0,
     session: Session = Depends(get_session),
@@ -98,7 +84,7 @@ def recommendations(
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
     matches, _ = _compute_recommendations(
-        profile, keywords, location, include_slow_sources, min_score, llm_rerank_top_n
+        session, profile, keywords, sources, min_score, llm_rerank_top_n
     )
     return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
 
@@ -107,7 +93,7 @@ def recommendations(
 def index(
     request: Request,
     keywords: str = "php,symfony,backend",
-    location: str = "Warsaw",
+    sources: str = "",
     min_score: int = 0,
     llm_rerank_top_n: int = 0,
     session: Session = Depends(get_session),
@@ -120,7 +106,7 @@ def index(
         error = "No profile seeded yet — run scripts/seed_profile.py"
     else:
         matches, by_url = _compute_recommendations(
-            profile, keywords, location, False, min_score, llm_rerank_top_n
+            session, profile, keywords, sources, min_score, llm_rerank_top_n
         )
         for m in matches:
             vacancy = by_url.get(m.vacancy_url)
@@ -145,7 +131,7 @@ def index(
             "profile": profile,
             "recommendations": recommendations_ctx,
             "keywords": keywords,
-            "location": location,
+            "sources": sources,
             "min_score": min_score,
             "llm_rerank_top_n": llm_rerank_top_n,
             "error": error,
@@ -237,9 +223,9 @@ def get_resume_version(version_id: int, session: Session = Depends(get_session))
 
 
 def _vacancy_from_params(title: str, company: str, url: str, description: str) -> Vacancy:
-    # Vacancies aren't persisted (see ingestion - they're fetched live per
-    # request), so these actions take the vacancy details straight from
-    # the link/form that triggered them rather than looking up an id.
+    # Takes vacancy details straight from the link/form that triggered the
+    # action rather than looking up a stored record by id - simpler, and
+    # these routes don't otherwise need a DB round trip.
     return Vacancy(
         source="manual", external_id=url, title=title, company=company,
         location="", remote=False, url=url, description=description, tags=[],

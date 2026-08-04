@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 
 class Profile(SQLModel, table=True):
@@ -71,3 +71,27 @@ class ResumeVersion(SQLModel, table=True):
     is_active: bool = False
 
     profile: Profile = Relationship(back_populates="resume_versions")
+
+
+class VacancyRecord(SQLModel, table=True):
+    """Persisted counterpart to ingestion.models.Vacancy (that one stays a
+    plain DTO for what a source just fetched; this one is what's actually
+    stored). Upserted by (source, external_id) - re-ingesting a still-open
+    posting updates last_seen_at rather than creating a duplicate."""
+
+    __tablename__ = "vacancy"
+    __table_args__ = (UniqueConstraint("source", "external_id", name="uq_vacancy_source_external_id"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    source: str = Field(index=True)
+    external_id: str
+    title: str
+    company: str
+    location: str = ""
+    remote: bool = False
+    url: str
+    description: str = ""
+    tags: str = ""  # comma-separated - SQLite has no native array type
+    posted_at: Optional[datetime] = None  # from the source, if it provides one
+    first_seen_at: datetime = Field(default_factory=datetime.utcnow)
+    last_seen_at: datetime = Field(default_factory=datetime.utcnow)
