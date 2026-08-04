@@ -7,6 +7,7 @@ from .ingestion.pipeline import fetch_all
 from .ingestion.sources.adzuna import AdzunaSource
 from .ingestion.sources.arbeitnow import ArbeitnowSource
 from .ingestion.sources.justjoinit import JustJoinItSource
+from .matching.engine import score_vacancies
 from .storage.db import get_session, init_db
 from .storage.models import Profile
 
@@ -45,6 +46,26 @@ def vacancies(
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
     results = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
     return {"count": len(results), "vacancies": [v.model_dump() for v in results]}
+
+
+@app.get("/recommendations")
+def recommendations(
+    keywords: str = "php,symfony,backend",
+    location: str = "Warsaw",
+    include_slow_sources: bool = False,
+    min_score: int = 0,
+    session: Session = Depends(get_session),
+):
+    profile = session.exec(select(Profile)).first()
+    if not profile:
+        raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
+    profile_skills = [s.name for s in profile.skills]
+
+    keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    fetched = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
+    matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
+
+    return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
 
 
 @app.get("/profile")
