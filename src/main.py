@@ -1,7 +1,10 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
 load_dotenv()  # docker-compose injects env vars directly via env_file; local
@@ -17,6 +20,7 @@ from .storage.db import get_session, init_db  # noqa: E402
 from .storage.models import Profile  # noqa: E402
 
 app = FastAPI(title="career-copilot")
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 @app.on_event("startup")
@@ -53,6 +57,30 @@ def vacancies(
     return {"count": len(results), "vacancies": [v.model_dump() for v in results]}
 
 
+def _compute_recommendations(
+    profile: Profile,
+    keywords: str,
+    location: str,
+    include_slow_sources: bool,
+    min_score: int,
+    llm_rerank_top_n: int,
+) -> list:
+    profile_skills = [s.name for s in profile.skills]
+    keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    fetched = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
+    heuristic_matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
+
+    if llm_rerank_top_n > 0:
+        # LLM calls shell out to the local `claude` CLI - several seconds
+        # and real cost per call - so only the top of the cheap heuristic
+        # ranking gets reranked, never the full result set.
+        by_url = {v.url: v for v in fetched}
+        shortlist = [by_url[m.vacancy_url] for m in heuristic_matches[:llm_rerank_top_n]]
+        return llm_rerank(shortlist, profile)
+
+    return heuristic_matches
+
+
 @app.get("/recommendations")
 def recommendations(
     keywords: str = "php,symfony,backend",
@@ -65,22 +93,59 @@ def recommendations(
     profile = session.exec(select(Profile)).first()
     if not profile:
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
-    profile_skills = [s.name for s in profile.skills]
 
-    keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
-    fetched = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
-    heuristic_matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
+    matches = _compute_recommendations(
+        profile, keywords, location, include_slow_sources, min_score, llm_rerank_top_n
+    )
+    return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
 
-    if llm_rerank_top_n > 0:
-        # LLM calls shell out to the local `claude` CLI - several seconds
-        # and real cost per call - so only the top of the cheap heuristic
-        # ranking gets reranked, never the full result set.
-        by_url = {v.url: v for v in fetched}
-        shortlist = [by_url[m.vacancy_url] for m in heuristic_matches[:llm_rerank_top_n]]
-        llm_matches = llm_rerank(shortlist, profile)
-        return {"count": len(llm_matches), "recommendations": [m.model_dump() for m in llm_matches]}
 
-    return {"count": len(heuristic_matches), "recommendations": [m.model_dump() for m in heuristic_matches]}
+@app.get("/", response_class=HTMLResponse)
+def index(
+    request: Request,
+    keywords: str = "php,symfony,backend",
+    location: str = "Warsaw",
+    min_score: int = 0,
+    llm_rerank_top_n: int = 0,
+    session: Session = Depends(get_session),
+):
+    profile = session.exec(select(Profile)).first()
+    recommendations_ctx = []
+    error = None
+
+    if not profile:
+        error = "No profile seeded yet — run scripts/seed_profile.py"
+    else:
+        matches = _compute_recommendations(
+            profile, keywords, location, False, min_score, llm_rerank_top_n
+        )
+        for m in matches:
+            item = {
+                "title": m.vacancy_title,
+                "company": m.vacancy_company,
+                "url": m.vacancy_url,
+                "score": m.score,
+            }
+            if hasattr(m, "reasoning"):
+                item["reasoning"] = m.reasoning
+                item["concerns"] = m.concerns
+            else:
+                item["matched_skills"] = m.matched_skills
+            recommendations_ctx.append(item)
+
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "profile": profile,
+            "recommendations": recommendations_ctx,
+            "keywords": keywords,
+            "location": location,
+            "min_score": min_score,
+            "llm_rerank_top_n": llm_rerank_top_n,
+            "error": error,
+        },
+    )
 
 
 @app.get("/profile")

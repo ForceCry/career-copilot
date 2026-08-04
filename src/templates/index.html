@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>career-copilot</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --border: #d8d8d8;
+    --muted: #666;
+    --bg-card: #fafafa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --border: #3a3a3a; --muted: #999; --bg-card: #1c1c1c; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.3rem; margin-bottom: 2px; }
+  .muted { color: var(--muted); }
+  .profile-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+    background: var(--bg-card);
+  }
+  .tags { margin-top: 8px; }
+  .tag {
+    display: inline-block;
+    font-size: 0.78rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    margin: 2px 3px 0 0;
+  }
+  form.search {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  form.search input[type=text], form.search input[type=number] {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+  }
+  form.search label { font-size: 0.78rem; color: var(--muted); display: block; margin-bottom: 2px; }
+  form.search button {
+    padding: 7px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    cursor: pointer;
+  }
+  .rec {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 10px;
+  }
+  .rec-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .rec-title { font-weight: 600; }
+  .score {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .score-high { color: #1f8a3d; }
+  .score-mid { color: #b8860b; }
+  .score-low { color: #999; }
+  .rec-meta { font-size: 0.85rem; color: var(--muted); margin-top: 2px; }
+  .rec-reasoning { margin-top: 8px; font-size: 0.9rem; }
+  .rec-concerns { margin-top: 6px; font-size: 0.82rem; color: var(--muted); }
+  .rec a { color: inherit; }
+  .empty { color: var(--muted); padding: 20px 0; }
+</style>
+</head>
+<body>
+
+{% if profile %}
+<div class="profile-card">
+  <h1>{{ profile.full_name }}</h1>
+  <div class="muted">{{ profile.location }} &middot; {{ profile.email }}</div>
+  <div>{{ profile.summary }}</div>
+  <div class="tags">
+    {% for skill in profile.skills %}<span class="tag">{{ skill.name }}</span>{% endfor %}
+  </div>
+</div>
+{% else %}
+<p class="empty">No profile seeded yet — run <code>scripts/seed_profile.py</code>.</p>
+{% endif %}
+
+<form class="search" method="get" action="/">
+  <div>
+    <label>Keywords</label>
+    <input type="text" name="keywords" value="{{ keywords }}">
+  </div>
+  <div>
+    <label>Location</label>
+    <input type="text" name="location" value="{{ location }}">
+  </div>
+  <div>
+    <label>Min score</label>
+    <input type="number" name="min_score" value="{{ min_score }}" style="width: 70px">
+  </div>
+  <div>
+    <label>LLM rerank top N</label>
+    <input type="number" name="llm_rerank_top_n" value="{{ llm_rerank_top_n }}" style="width: 70px">
+  </div>
+  <div style="align-self: flex-end">
+    <button type="submit">Search</button>
+  </div>
+</form>
+
+{% if error %}
+  <p class="empty">{{ error }}</p>
+{% elif recommendations %}
+  <p class="muted">{{ recommendations|length }} result(s){% if llm_rerank_top_n > 0 %} — LLM-reranked{% endif %}</p>
+  {% for rec in recommendations %}
+  <div class="rec">
+    <div class="rec-head">
+      <div>
+        <div class="rec-title"><a href="{{ rec.url }}" target="_blank" rel="noopener">{{ rec.title }}</a></div>
+        <div class="rec-meta">{{ rec.company }}</div>
+      </div>
+      <div class="score {% if rec.score >= 70 %}score-high{% elif rec.score >= 40 %}score-mid{% else %}score-low{% endif %}">
+        {{ rec.score }}
+      </div>
+    </div>
+    {% if rec.reasoning is defined %}
+      <div class="rec-reasoning">{{ rec.reasoning }}</div>
+      {% if rec.concerns %}
+      <div class="rec-concerns">Concerns: {{ rec.concerns|join(", ") }}</div>
+      {% endif %}
+    {% else %}
+      <div class="tags">
+        {% for skill in rec.matched_skills %}<span class="tag">{{ skill }}</span>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% else %}
+  <p class="empty">No matches for this search.</p>
+{% endif %}
+
+</body>
+</html>
