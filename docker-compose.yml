@@ -24,6 +24,23 @@ services:
       - career-copilot-external  # to reach the embedding service
     restart: unless-stopped
 
+  embedding-worker:
+    build: .
+    command: ["python", "scripts/embedding_worker.py"]
+    env_file:
+      - .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - default
+      - career-copilot-external  # to reach the embedding service
+    restart: unless-stopped
+
   mysql:
     image: mysql:8
     ports:
