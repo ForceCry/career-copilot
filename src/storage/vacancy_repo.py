@@ -92,6 +92,16 @@ def _to_ingestion_vacancy(record: VacancyRecord) -> IngestionVacancy:
     )
 
 
+def get_vacancies_by_ids(session: Session, ids: list[int]) -> dict[int, IngestionVacancy]:
+    """Joins vector-search hits (which only carry id/title/company/url,
+    see search/es_client.py) back to the full record - description,
+    salary, etc. live in MySQL, not duplicated into Elasticsearch."""
+    if not ids:
+        return {}
+    records = session.exec(select(VacancyRecord).where(VacancyRecord.id.in_(ids))).all()
+    return {record.id: _to_ingestion_vacancy(record) for record in records}
+
+
 def query_vacancies(
     session: Session, keywords: list[str], sources: list[str] | None = None
 ) -> list[IngestionVacancy]:

@@ -12,11 +12,11 @@ load_dotenv()  # docker-compose injects env vars directly via env_file; local
 from .documents.llm_writer import generate_cover_letter, suggest_resume_tailoring  # noqa: E402
 from .documents.resume import render_resume_html  # noqa: E402
 from .ingestion.models import Vacancy  # noqa: E402
-from .matching.engine import score_vacancies  # noqa: E402
 from .matching.llm_scorer import llm_rerank  # noqa: E402
+from .matching.vector_scorer import VectorMatchResult, vector_search  # noqa: E402
 from .storage.db import get_session, init_db  # noqa: E402
 from .storage.models import Profile, ResumeVersion  # noqa: E402
-from .storage.vacancy_repo import query_vacancies  # noqa: E402
+from .storage.vacancy_repo import get_vacancies_by_ids, query_vacancies  # noqa: E402
 
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -49,33 +49,44 @@ def vacancies(
 def _compute_recommendations(
     session: Session,
     profile: Profile,
-    keywords: str,
     sources: str,
     min_score: int,
+    top_k: int,
     llm_rerank_top_n: int,
 ) -> tuple[list, dict[str, Vacancy]]:
-    profile_skills = [s.name for s in profile.skills]
-    keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
     source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
-    stored = query_vacancies(session, keyword_list, source_list)
-    by_url = {v.url: v for v in stored}
-    heuristic_matches = [m for m in score_vacancies(stored, profile_skills) if m.score >= min_score]
+    hits = vector_search(profile, k=top_k, sources=source_list)
+
+    vacancies_by_id = get_vacancies_by_ids(session, [h["vacancy_id"] for h in hits])
+    by_url = {v.url: v for v in vacancies_by_id.values()}
+
+    vector_matches = [
+        VectorMatchResult(
+            vacancy_title=h["title"],
+            vacancy_company=h["company"],
+            vacancy_url=h["url"],
+            score=round(h["score"] * 100),
+        )
+        for h in hits
+        if h["vacancy_id"] in vacancies_by_id  # guards against a stale ES doc whose MySQL row is gone
+    ]
+    vector_matches = [m for m in vector_matches if m.score >= min_score]
 
     if llm_rerank_top_n > 0:
         # LLM calls shell out to the local `claude` CLI - several seconds
-        # and real cost per call - so only the top of the cheap heuristic
-        # ranking gets reranked, never the full result set.
-        shortlist = [by_url[m.vacancy_url] for m in heuristic_matches[:llm_rerank_top_n]]
+        # and real cost per call - so only the top of the cheap vector
+        # search shortlist gets reranked, never the full result set.
+        shortlist = [by_url[m.vacancy_url] for m in vector_matches[:llm_rerank_top_n]]
         return llm_rerank(shortlist, profile), by_url
 
-    return heuristic_matches, by_url
+    return vector_matches, by_url
 
 
 @app.get("/recommendations")
 def recommendations(
-    keywords: str = "php,symfony,backend",
     sources: str = "",
     min_score: int = 0,
+    top_k: int = 20,
     llm_rerank_top_n: int = 0,
     session: Session = Depends(get_session),
 ):
@@ -84,7 +95,7 @@ def recommendations(
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
     matches, _ = _compute_recommendations(
-        session, profile, keywords, sources, min_score, llm_rerank_top_n
+        session, profile, sources, min_score, top_k, llm_rerank_top_n
     )
     return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
 
@@ -92,9 +103,9 @@ def recommendations(
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
-    keywords: str = "php,symfony,backend",
     sources: str = "",
     min_score: int = 0,
+    top_k: int = 20,
     llm_rerank_top_n: int = 0,
     session: Session = Depends(get_session),
 ):
@@ -106,7 +117,7 @@ def index(
         error = "No profile seeded yet — run scripts/seed_profile.py"
     else:
         matches, by_url = _compute_recommendations(
-            session, profile, keywords, sources, min_score, llm_rerank_top_n
+            session, profile, sources, min_score, top_k, llm_rerank_top_n
         )
         for m in matches:
             vacancy = by_url.get(m.vacancy_url)
@@ -125,7 +136,7 @@ def index(
             if hasattr(m, "reasoning"):
                 item["reasoning"] = m.reasoning
                 item["concerns"] = m.concerns
-            else:
+            elif hasattr(m, "matched_skills"):
                 item["matched_skills"] = m.matched_skills
             recommendations_ctx.append(item)
 
@@ -135,9 +146,9 @@ def index(
         {
             "profile": profile,
             "recommendations": recommendations_ctx,
-            "keywords": keywords,
             "sources": sources,
             "min_score": min_score,
+            "top_k": top_k,
             "llm_rerank_top_n": llm_rerank_top_n,
             "error": error,
         },

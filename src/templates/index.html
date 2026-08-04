@@ -116,12 +116,12 @@
 
 <form class="search" method="get" action="/">
   <div>
-    <label>Keywords</label>
-    <input type="text" name="keywords" value="{{ keywords }}">
-  </div>
-  <div>
     <label>Sources (blank = all)</label>
     <input type="text" name="sources" value="{{ sources }}" placeholder="adzuna,arbeitnow,justjoinit">
+  </div>
+  <div>
+    <label>Top K (vector search)</label>
+    <input type="number" name="top_k" value="{{ top_k }}" style="width: 70px">
   </div>
   <div>
     <label>Min score</label>
@@ -139,7 +139,7 @@
 {% if error %}
   <p class="empty">{{ error }}</p>
 {% elif recommendations %}
-  <p class="muted">{{ recommendations|length }} result(s){% if llm_rerank_top_n > 0 %} — LLM-reranked{% endif %}</p>
+  <p class="muted">{{ recommendations|length }} result(s) — semantic match{% if llm_rerank_top_n > 0 %}, LLM-reranked{% endif %}</p>
   {% for rec in recommendations %}
   <div class="rec">
     <div class="rec-head">
@@ -163,7 +163,7 @@
       {% if rec.concerns %}
       <div class="rec-concerns">Concerns: {{ rec.concerns|join(", ") }}</div>
       {% endif %}
-    {% else %}
+    {% elif rec.matched_skills is defined %}
       <div class="tags">
         {% for skill in rec.matched_skills %}<span class="tag">{{ skill }}</span>{% endfor %}
       </div>
