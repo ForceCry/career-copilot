@@ -5,6 +5,9 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    depends_on:
+      mysql:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       # Read-only: the container can use the OAuth session to call `claude`,
@@ -13,3 +16,24 @@ services:
       - ${HOME}/.claude:/root/.claude:ro
       - ${HOME}/.claude.json:/root/.claude.json:ro
     restart: unless-stopped
+
+  mysql:
+    image: mysql:8
+    ports:
+      - "3306:3306"  # exposed for local (non-Docker) dev too, not just the api container
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-career_copilot}
+      MYSQL_USER: ${MYSQL_USER:-career_copilot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-career_copilot}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

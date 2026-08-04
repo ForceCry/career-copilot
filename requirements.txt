@@ -3,7 +3,9 @@ annotated-types==0.8.0
 anyio==4.14.2
 apscheduler==3.11.3
 certifi==2026.7.22
+cffi==2.1.1
 click==8.4.2
+cryptography==50.0.0
 fastapi==0.141.1
 greenlet==3.5.4
 h11==0.16.0
@@ -12,8 +14,10 @@ httpx==0.28.1
 idna==3.18
 jinja2==3.1.6
 markupsafe==3.0.3
+pycparser==3.0
 pydantic==2.13.4
 pydantic-core==2.46.4
+pymysql==1.2.0
 python-dotenv==1.2.2
 sqlalchemy==2.0.51
 sqlmodel==0.0.39

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from typing import Optional
 
+from sqlalchemy import Column, Text
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
 
 
@@ -16,7 +17,7 @@ class Profile(SQLModel, table=True):
     phone: str = ""
     linkedin_url: str = ""
     github_url: str = ""
-    summary: str = ""
+    summary: str = Field(default="", sa_column=Column(Text))
     languages: str = ""  # "English (B1-B2), Ukrainian (Native)"
 
     skills: list["Skill"] = Relationship(back_populates="profile")
@@ -42,7 +43,7 @@ class Experience(SQLModel, table=True):
     location: str = ""
     start_date: date
     end_date: Optional[date] = None  # None = current position
-    highlights: str = ""  # newline-separated bullet points
+    highlights: str = Field(default="", sa_column=Column(Text))  # newline-separated bullet points
 
     profile: Profile = Relationship(back_populates="experiences")
 
@@ -66,7 +67,7 @@ class ResumeVersion(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     profile_id: int = Field(foreign_key="profile.id")
     label: str = ""
-    content_html: str
+    content_html: str = Field(sa_column=Column(Text))
     created_at: datetime = Field(default_factory=datetime.utcnow)
     is_active: bool = False
 
@@ -89,9 +90,9 @@ class VacancyRecord(SQLModel, table=True):
     company: str
     location: str = ""
     remote: bool = False
-    url: str
-    description: str = ""
-    tags: str = ""  # comma-separated - SQLite has no native array type
+    url: str = Field(sa_column=Column(Text))
+    description: str = Field(default="", sa_column=Column(Text))
+    tags: str = Field(default="", sa_column=Column(Text))  # comma-separated - no native array type
     posted_at: Optional[datetime] = None  # from the source, if it provides one
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
