@@ -1,15 +1,20 @@
 import os
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from sqlmodel import Session, select
 
-from .ingestion.pipeline import fetch_all
-from .ingestion.sources.adzuna import AdzunaSource
-from .ingestion.sources.arbeitnow import ArbeitnowSource
-from .ingestion.sources.justjoinit import JustJoinItSource
-from .matching.engine import score_vacancies
-from .storage.db import get_session, init_db
-from .storage.models import Profile
+load_dotenv()  # docker-compose injects env vars directly via env_file; local
+# runs (uvicorn, scripts) need this to pick up .env themselves.
+
+from .ingestion.pipeline import fetch_all  # noqa: E402
+from .ingestion.sources.adzuna import AdzunaSource  # noqa: E402
+from .ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
+from .ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
+from .matching.engine import score_vacancies  # noqa: E402
+from .matching.llm_scorer import llm_rerank  # noqa: E402
+from .storage.db import get_session, init_db  # noqa: E402
+from .storage.models import Profile  # noqa: E402
 
 app = FastAPI(title="career-copilot")
 
@@ -54,6 +59,7 @@ def recommendations(
     location: str = "Warsaw",
     include_slow_sources: bool = False,
     min_score: int = 0,
+    llm_rerank_top_n: int = 0,
     session: Session = Depends(get_session),
 ):
     profile = session.exec(select(Profile)).first()
@@ -63,9 +69,18 @@ def recommendations(
 
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
     fetched = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
-    matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
+    heuristic_matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
 
-    return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
+    if llm_rerank_top_n > 0:
+        # LLM calls shell out to the local `claude` CLI - several seconds
+        # and real cost per call - so only the top of the cheap heuristic
+        # ranking gets reranked, never the full result set.
+        by_url = {v.url: v for v in fetched}
+        shortlist = [by_url[m.vacancy_url] for m in heuristic_matches[:llm_rerank_top_n]]
+        llm_matches = llm_rerank(shortlist, profile)
+        return {"count": len(llm_matches), "recommendations": [m.model_dump() for m in llm_matches]}
+
+    return {"count": len(heuristic_matches), "recommendations": [m.model_dump() for m in heuristic_matches]}
 
 
 @app.get("/profile")
