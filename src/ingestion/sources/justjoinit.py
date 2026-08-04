@@ -5,6 +5,7 @@ from xml.etree import ElementTree
 
 import httpx
 
+from ..http import get_with_retry
 from ..models import Vacancy
 from .base import VacancySource
 
@@ -53,7 +54,7 @@ class JustJoinItSource(VacancySource):
         return vacancies
 
     def _collect_job_urls(self, client: httpx.Client) -> list[str]:
-        index_response = client.get(SITEMAP_INDEX_URL)
+        index_response = get_with_retry(client, SITEMAP_INDEX_URL)
         index_response.raise_for_status()
         index_root = ElementTree.fromstring(index_response.content)
         part_urls = [
@@ -62,7 +63,7 @@ class JustJoinItSource(VacancySource):
 
         urls: list[str] = []
         for part_url in part_urls:
-            part_response = client.get(part_url)
+            part_response = get_with_retry(client, part_url)
             part_response.raise_for_status()
             part_root = ElementTree.fromstring(part_response.content)
             urls.extend(
@@ -71,7 +72,7 @@ class JustJoinItSource(VacancySource):
         return urls
 
     def _fetch_job_posting(self, client: httpx.Client, url: str) -> dict | None:
-        response = client.get(url)
+        response = get_with_retry(client, url)
         if response.status_code != 200:
             return None
         match = JSON_LD_PATTERN.search(response.text)

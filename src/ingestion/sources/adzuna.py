@@ -1,7 +1,9 @@
 import os
+import time
 
 import httpx
 
+from ..http import get_with_retry
 from ..models import Vacancy
 from .base import VacancySource
 
@@ -11,7 +13,11 @@ API_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
 class AdzunaSource(VacancySource):
     """Requires a free app_id/app_key from https://developer.adzuna.com/.
     Unlike Arbeitnow, `what` (keywords) and `where` (location) are real
-    server-side filters, and `pl` (Poland) is a supported country code."""
+    server-side filters, and `pl` (Poland) is a supported country code.
+
+    No documented rate limit was found for the public API, but request_delay
+    + get_with_retry are here anyway - being a well-behaved client shouldn't
+    depend on whether a provider happens to publish a limit."""
 
     name = "adzuna"
 
@@ -21,6 +27,7 @@ class AdzunaSource(VacancySource):
         results_per_page: int = 50,
         max_pages: int = 3,
         timeout: float = 15.0,
+        request_delay: float = 0.3,
     ):
         self.app_id = os.environ["ADZUNA_APP_ID"]
         self.app_key = os.environ["ADZUNA_APP_KEY"]
@@ -28,12 +35,16 @@ class AdzunaSource(VacancySource):
         self.results_per_page = results_per_page
         self.max_pages = max_pages
         self.timeout = timeout
+        self.request_delay = request_delay
 
     def fetch(self, keywords: list[str], location: str) -> list[Vacancy]:
         results: list[Vacancy] = []
 
         with httpx.Client(timeout=self.timeout) as client:
             for page in range(1, self.max_pages + 1):
+                if page > 1:
+                    time.sleep(self.request_delay)
+
                 url = API_URL.format(country=self.country, page=page)
                 params = {
                     "app_id": self.app_id,
@@ -43,7 +54,7 @@ class AdzunaSource(VacancySource):
                     "where": location,
                     "content-type": "application/json",
                 }
-                response = client.get(url, params=params)
+                response = get_with_retry(client, url, params=params)
                 response.raise_for_status()
                 jobs = response.json().get("results", [])
                 if not jobs:
