@@ -46,13 +46,30 @@ per-source cadence makes sense - see the script's docstring for an example.
 `GET /vacancies` and `GET /recommendations` read whatever's in the DB; if
 they come back empty, nothing has been ingested yet.
 
+Each successful ingest also publishes newly-inserted vacancy ids to a
+RabbitMQ queue (`vacancy.embed`) - see Matching below for what consumes it.
+Only genuinely new vacancies get queued, not ones just refreshed on
+re-ingest (re-embedding unchanged text would be wasted work). If vacancies
+exist in the DB but were never queued for some reason (e.g. ingested before
+this pipeline existed), `scripts/backfill_embeddings.py` queues everything
+currently stored - idempotent, safe to run anytime.
+
 ## Matching
 
-`GET /recommendations` runs a two-stage pipeline: a free, deterministic
-skill-overlap heuristic ranks every fetched vacancy first, then
-`llm_rerank_top_n=N` (opt-in, 0 by default) sends only the top N of that
-shortlist to an LLM for semantic reasoning — seniority fit, overqualification
-risk, gaps a keyword match can't see.
+Two-stage pipeline. First stage is semantic, not keyword-based: the
+profile is embedded (`query: ...` prefix) and matched via Elasticsearch
+kNN against vacancy embeddings, computed by a separate **embedding-worker**
+service that consumes `vacancy.embed`, fetches the vacancy text from
+MySQL, embeds it (`passage: {title}\n\n{description}`) via the TEI service
+in `career-copilot-infra`, and indexes the vector. This replaced an
+earlier keyword-overlap heuristic entirely - free to run, but blind to
+synonyms and much cheaper to scale to a large vacancy pool than scoring
+every vacancy with an LLM call.
+
+`llm_rerank_top_n=N` (opt-in, 0 by default) is the second stage: sends
+only the top N of the vector-search shortlist to an LLM for semantic
+reasoning — seniority fit, overqualification risk, gaps a similarity
+score alone can't explain.
 
 The LLM call goes through the local `claude` CLI (`claude -p ...`), not the
 Anthropic API — it reuses your already-authenticated Claude Code session, no
@@ -67,13 +84,19 @@ without it, just without the LLM rerank layer.
 
 ### Docker (recommended)
 
+Requires [`career-copilot-infra`](../career-copilot-infra) running first
+(shared embedding service + the `career-copilot-external` network both
+projects attach to):
+
 ```bash
+cd ../career-copilot-infra && docker compose up -d
+cd ../career-copilot
 cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 docker compose up --build -d
 docker compose exec api python scripts/ingest.py --source adzuna
 curl http://localhost:8000/health
 curl "http://localhost:8000/vacancies?keywords=php,symfony"
-curl "http://localhost:8000/recommendations?keywords=php,symfony&llm_rerank_top_n=5"
+curl "http://localhost:8000/recommendations?top_k=10&llm_rerank_top_n=5"
 ```
 
 ### Local (no Docker)
