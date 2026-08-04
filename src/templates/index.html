@@ -87,6 +87,16 @@
   .rec-concerns { margin-top: 6px; font-size: 0.82rem; color: var(--muted); }
   .rec a { color: inherit; }
   .empty { color: var(--muted); padding: 20px 0; }
+  .rec-actions { margin-top: 10px; display: flex; gap: 8px; }
+  .rec-actions button {
+    font-size: 0.78rem;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    cursor: pointer;
+    color: inherit;
+  }
 </style>
 </head>
 <body>
@@ -94,7 +104,7 @@
 {% if profile %}
 <div class="profile-card">
   <h1>{{ profile.full_name }}</h1>
-  <div class="muted">{{ profile.location }} &middot; {{ profile.email }}</div>
+  <div class="muted">{{ profile.location }} &middot; {{ profile.email }} &middot; <a href="/resume" target="_blank">view resume</a></div>
   <div>{{ profile.summary }}</div>
   <div class="tags">
     {% for skill in profile.skills %}<span class="tag">{{ skill.name }}</span>{% endfor %}
@@ -151,6 +161,22 @@
         {% for skill in rec.matched_skills %}<span class="tag">{{ skill }}</span>{% endfor %}
       </div>
     {% endif %}
+    <div class="rec-actions">
+      <form method="get" action="/cover-letter" target="_blank">
+        <input type="hidden" name="title" value="{{ rec.title }}">
+        <input type="hidden" name="company" value="{{ rec.company }}">
+        <input type="hidden" name="url" value="{{ rec.url }}">
+        <input type="hidden" name="description" value="{{ rec.description }}">
+        <button type="submit">Cover letter</button>
+      </form>
+      <form method="get" action="/tailoring-suggestions" target="_blank">
+        <input type="hidden" name="title" value="{{ rec.title }}">
+        <input type="hidden" name="company" value="{{ rec.company }}">
+        <input type="hidden" name="url" value="{{ rec.url }}">
+        <input type="hidden" name="description" value="{{ rec.description }}">
+        <button type="submit">Tailor resume</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 {% else %}

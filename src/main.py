@@ -10,6 +10,9 @@ from sqlmodel import Session, select
 load_dotenv()  # docker-compose injects env vars directly via env_file; local
 # runs (uvicorn, scripts) need this to pick up .env themselves.
 
+from .documents.llm_writer import generate_cover_letter, suggest_resume_tailoring  # noqa: E402
+from .documents.resume import render_resume_html  # noqa: E402
+from .ingestion.models import Vacancy  # noqa: E402
 from .ingestion.pipeline import fetch_all  # noqa: E402
 from .ingestion.sources.adzuna import AdzunaSource  # noqa: E402
 from .ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
@@ -17,7 +20,7 @@ from .ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
 from .matching.engine import score_vacancies  # noqa: E402
 from .matching.llm_scorer import llm_rerank  # noqa: E402
 from .storage.db import get_session, init_db  # noqa: E402
-from .storage.models import Profile  # noqa: E402
+from .storage.models import Profile, ResumeVersion  # noqa: E402
 
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -64,21 +67,21 @@ def _compute_recommendations(
     include_slow_sources: bool,
     min_score: int,
     llm_rerank_top_n: int,
-) -> list:
+) -> tuple[list, dict[str, Vacancy]]:
     profile_skills = [s.name for s in profile.skills]
     keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
     fetched = fetch_all(_configured_sources(include_slow_sources), keyword_list, location)
+    by_url = {v.url: v for v in fetched}
     heuristic_matches = [m for m in score_vacancies(fetched, profile_skills) if m.score >= min_score]
 
     if llm_rerank_top_n > 0:
         # LLM calls shell out to the local `claude` CLI - several seconds
         # and real cost per call - so only the top of the cheap heuristic
         # ranking gets reranked, never the full result set.
-        by_url = {v.url: v for v in fetched}
         shortlist = [by_url[m.vacancy_url] for m in heuristic_matches[:llm_rerank_top_n]]
-        return llm_rerank(shortlist, profile)
+        return llm_rerank(shortlist, profile), by_url
 
-    return heuristic_matches
+    return heuristic_matches, by_url
 
 
 @app.get("/recommendations")
@@ -94,7 +97,7 @@ def recommendations(
     if not profile:
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
-    matches = _compute_recommendations(
+    matches, _ = _compute_recommendations(
         profile, keywords, location, include_slow_sources, min_score, llm_rerank_top_n
     )
     return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
@@ -116,15 +119,17 @@ def index(
     if not profile:
         error = "No profile seeded yet — run scripts/seed_profile.py"
     else:
-        matches = _compute_recommendations(
+        matches, by_url = _compute_recommendations(
             profile, keywords, location, False, min_score, llm_rerank_top_n
         )
         for m in matches:
+            vacancy = by_url.get(m.vacancy_url)
             item = {
                 "title": m.vacancy_title,
                 "company": m.vacancy_company,
                 "url": m.vacancy_url,
                 "score": m.score,
+                "description": vacancy.description if vacancy else "",
             }
             if hasattr(m, "reasoning"):
                 item["reasoning"] = m.reasoning
@@ -186,3 +191,106 @@ def get_profile(session: Session = Depends(get_session)):
             for ed in profile.educations
         ],
     }
+
+
+def _get_profile_or_404(session: Session) -> Profile:
+    profile = session.exec(select(Profile)).first()
+    if not profile:
+        raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
+    return profile
+
+
+@app.get("/resume", response_class=HTMLResponse)
+def resume(session: Session = Depends(get_session)):
+    """Always renders live from the current profile data - not a stored
+    snapshot. Use POST /resume/versions to save a snapshot worth keeping."""
+    return HTMLResponse(render_resume_html(_get_profile_or_404(session)))
+
+
+@app.post("/resume/versions")
+def save_resume_version(label: str = "", session: Session = Depends(get_session)):
+    profile = _get_profile_or_404(session)
+    version = ResumeVersion(
+        profile_id=profile.id, label=label, content_html=render_resume_html(profile)
+    )
+    session.add(version)
+    session.commit()
+    session.refresh(version)
+    return {"id": version.id, "label": version.label, "created_at": version.created_at}
+
+
+@app.get("/resume/versions")
+def list_resume_versions(session: Session = Depends(get_session)):
+    profile = _get_profile_or_404(session)
+    return [
+        {"id": v.id, "label": v.label, "created_at": v.created_at}
+        for v in sorted(profile.resume_versions, key=lambda v: v.created_at, reverse=True)
+    ]
+
+
+@app.get("/resume/versions/{version_id}", response_class=HTMLResponse)
+def get_resume_version(version_id: int, session: Session = Depends(get_session)):
+    version = session.get(ResumeVersion, version_id)
+    if not version:
+        raise HTTPException(404, "Resume version not found")
+    return HTMLResponse(version.content_html)
+
+
+def _vacancy_from_params(title: str, company: str, url: str, description: str) -> Vacancy:
+    # Vacancies aren't persisted (see ingestion - they're fetched live per
+    # request), so these actions take the vacancy details straight from
+    # the link/form that triggered them rather than looking up an id.
+    return Vacancy(
+        source="manual", external_id=url, title=title, company=company,
+        location="", remote=False, url=url, description=description, tags=[],
+    )
+
+
+@app.get("/cover-letter", response_class=HTMLResponse)
+def cover_letter(
+    request: Request,
+    title: str,
+    company: str,
+    url: str,
+    description: str,
+    session: Session = Depends(get_session),
+):
+    profile = _get_profile_or_404(session)
+    vacancy = _vacancy_from_params(title, company, url, description)
+    letter = generate_cover_letter(vacancy, profile)
+    return templates.TemplateResponse(
+        request,
+        "text_result.html",
+        {
+            "page_title": "Cover letter",
+            "vacancy_title": title,
+            "vacancy_company": company,
+            "vacancy_url": url,
+            "body_text": letter,
+        },
+    )
+
+
+@app.get("/tailoring-suggestions", response_class=HTMLResponse)
+def tailoring_suggestions(
+    request: Request,
+    title: str,
+    company: str,
+    url: str,
+    description: str,
+    session: Session = Depends(get_session),
+):
+    profile = _get_profile_or_404(session)
+    vacancy = _vacancy_from_params(title, company, url, description)
+    suggestions = suggest_resume_tailoring(vacancy, profile)
+    return templates.TemplateResponse(
+        request,
+        "text_result.html",
+        {
+            "page_title": "Resume tailoring suggestions",
+            "vacancy_title": title,
+            "vacancy_company": company,
+            "vacancy_url": url,
+            "body_text": suggestions,
+        },
+    )

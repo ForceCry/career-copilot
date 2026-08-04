@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title }} — career-copilot</title>
+<style>
+  :root { color-scheme: light dark; --border: #d8d8d8; --muted: #666; --bg-card: #fafafa; }
+  @media (prefers-color-scheme: dark) { :root { --border: #3a3a3a; --muted: #999; --bg-card: #1c1c1c; } }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+    line-height: 1.55;
+  }
+  a.back { font-size: 0.85rem; color: var(--muted); text-decoration: none; }
+  h1 { font-size: 1.15rem; margin: 10px 0 2px; }
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 16px; }
+  .body-text {
+    white-space: pre-wrap;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    background: var(--bg-card);
+  }
+</style>
+</head>
+<body>
+  <a class="back" href="/">&larr; back to recommendations</a>
+  <h1>{{ page_title }}</h1>
+  <div class="meta">{{ vacancy_title }} @ {{ vacancy_company }} &middot; <a href="{{ vacancy_url }}" target="_blank" rel="noopener">view posting</a></div>
+  <div class="body-text">{{ body_text }}</div>
+</body>
+</html>

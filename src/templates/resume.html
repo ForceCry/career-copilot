@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ profile.full_name }} – Resume</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Times New Roman', Times, serif;
+    font-size: 10.5pt;
+    color: #111;
+    background: #fff;
+    padding: 28px 38px 24px 38px;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  .header { text-align: center; margin-bottom: 8px; }
+  .header h1 { font-size: 20pt; font-weight: bold; letter-spacing: 0.5px; }
+  .contact { font-size: 9pt; margin-top: 4px; color: #222; }
+  .contact a { color: #111; text-decoration: none; }
+  .contact span { margin: 0 5px; color: #666; }
+  .section { margin-top: 10px; }
+  .section-title {
+    font-size: 10.5pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    border-bottom: 1.2px solid #111;
+    padding-bottom: 2px;
+    margin-bottom: 6px;
+  }
+  .summary p { font-size: 10pt; line-height: 1.45; }
+  .job { margin-bottom: 8px; }
+  .job-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .job-title { font-weight: bold; font-size: 10.5pt; }
+  .job-date { font-size: 9.5pt; color: #333; white-space: nowrap; }
+  .job-company { font-size: 10pt; color: #222; margin-bottom: 3px; }
+  .job ul { padding-left: 16px; margin-top: 3px; }
+  .job ul li { font-size: 9.5pt; line-height: 1.4; margin-bottom: 2px; }
+  .skills-line { font-size: 9.5pt; line-height: 1.5; }
+  .edu-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .edu-name { font-weight: bold; font-size: 10pt; }
+  .edu-date { font-size: 9.5pt; color: #333; }
+  .edu-degree { font-size: 9.5pt; color: #222; }
+  .lang-line { font-size: 9.5pt; }
+  @media print {
+    body { padding: 20px 32px; }
+    @page { margin: 0; size: A4; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>{{ profile.full_name }}</h1>
+  <div class="contact">
+    {{ profile.location }}
+    <span>&bull;</span>
+    {{ profile.phone }}
+    <span>&bull;</span>
+    <a href="mailto:{{ profile.email }}">{{ profile.email }}</a>
+    {% if profile.linkedin_url %}<span>&bull;</span><a href="{{ profile.linkedin_url }}">{{ profile.linkedin_url }}</a>{% endif %}
+    {% if profile.github_url %}<span>&bull;</span><a href="{{ profile.github_url }}">{{ profile.github_url }}</a>{% endif %}
+  </div>
+</div>
+
+<div class="section summary">
+  <div class="section-title">Professional Summary</div>
+  <p>{{ profile.summary }}</p>
+</div>
+
+<div class="section">
+  <div class="section-title">Work Experience</div>
+  {% for exp in profile.experiences %}
+  <div class="job">
+    <div class="job-header">
+      <span class="job-title">{{ exp.title }}</span>
+      <span class="job-date">{{ exp.start_date|dateformat }} &ndash; {{ exp.end_date|dateformat }}</span>
+    </div>
+    <div class="job-company">{{ exp.company }}{% if exp.location %} &bull; {{ exp.location }}{% endif %}</div>
+    <ul>
+      {% for line in exp.highlights.split('\n') if line.strip() %}
+      <li>{{ line }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="section">
+  <div class="section-title">Skills</div>
+  <div class="skills-line">{{ profile.skills|map(attribute='name')|join(' &bull; ') }}</div>
+</div>
+
+<div class="section">
+  <div class="section-title">Education</div>
+  {% for edu in profile.educations %}
+  <div class="edu-header">
+    <span class="edu-name">{{ edu.institution }}</span>
+    <span class="edu-date">{{ edu.start_date|dateformat }} &ndash; {{ edu.end_date|dateformat }}</span>
+  </div>
+  <div class="edu-degree">{{ edu.degree }}{% if edu.field %}, {{ edu.field }}{% endif %}</div>
+  {% endfor %}
+</div>
+
+{% if profile.languages %}
+<div class="section">
+  <div class="section-title">Languages</div>
+  <div class="lang-line">{{ profile.languages }}</div>
+</div>
+{% endif %}
+
+</body>
+</html>
