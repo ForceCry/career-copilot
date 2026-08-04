@@ -8,6 +8,10 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       # Read-only: the container can use the OAuth session to call `claude`,
@@ -15,6 +19,9 @@ services:
       # is a separate top-level config file, not inside the .claude/ dir.
       - ${HOME}/.claude:/root/.claude:ro
       - ${HOME}/.claude.json:/root/.claude.json:ro
+    networks:
+      - default
+      - career-copilot-external  # to reach the embedding service
     restart: unless-stopped
 
   mysql:
@@ -35,5 +42,43 @@ services:
       retries: 10
     restart: unless-stopped
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    ports:
+      - "9200:9200"  # exposed for local (non-Docker) dev too
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"    # AMQP, exposed for local (non-Docker) dev too
+      - "15672:15672"  # management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+networks:
+  default:
+  career-copilot-external:
+    external: true
+
 volumes:
   mysql-data:
+  es-data:
