@@ -29,6 +29,22 @@ sources behind one interface before anything else gets built on top.
   embeds for search engines. Slow (one full page fetch per match) - meant
   to run occasionally, not on every request.
 
+Each source's actual fetch/parse logic now lives in its own standalone
+repo, not here - `AdzunaSource`/`ArbeitnowSource`/`JustJoinItSource` in
+`src/ingestion/sources/` are thin adapters mapping each library's own
+`Job` model onto this project's `Vacancy` DTO:
+
+- [`adzuna-client`](../adzuna-client)
+- [`arbeitnow-client`](../arbeitnow-client)
+- [`justjoinit-scraper`](../justjoinit-scraper)
+
+Each is independently installable and usable without this project - see
+their own READMEs for what was learned building them against the live
+APIs (rate limits, salary formats, what's actually filterable
+server-side). Expected to live as siblings of this repo (`Work/adzuna-client`,
+etc.) - both local dev and the Docker build (context is the parent
+directory, see Dockerfile) assume that layout.
+
 Nothing above is fetched live on a request anymore. `scripts/ingest.py
 --source <name>` pulls from one source and upserts into the DB - each
 source is its own command deliberately, since they have very different
@@ -104,6 +120,7 @@ curl "http://localhost:8000/recommendations?top_k=10&llm_rerank_top_n=5"
 ```bash
 uv venv
 uv pip install -r requirements.txt
+uv pip install -e ../adzuna-client -e ../arbeitnow-client -e ../justjoinit-scraper
 cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 .venv/bin/uvicorn src.main:app --reload
 ```

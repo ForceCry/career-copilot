@@ -1,6 +1,8 @@
 services:
   api:
-    build: .
+    build:
+      context: ..  # needs to reach sibling adzuna-client/arbeitnow-client/justjoinit-scraper repos
+      dockerfile: career-copilot/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -25,7 +27,9 @@ services:
     restart: unless-stopped
 
   embedding-worker:
-    build: .
+    build:
+      context: ..  # needs to reach sibling adzuna-client/arbeitnow-client/justjoinit-scraper repos
+      dockerfile: career-copilot/Dockerfile
     command: ["python", "scripts/embedding_worker.py"]
     env_file:
       - .env

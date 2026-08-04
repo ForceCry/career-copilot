@@ -9,11 +9,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code
 
-COPY requirements.txt .
+# Build context is the parent Work/ directory (see docker-compose.yml),
+# not career-copilot/ itself - needed to reach these sibling library
+# repos, each extracted as its own standalone, independently installable
+# package (not published anywhere yet, so installed from source here).
+COPY adzuna-client /libs/adzuna-client
+COPY arbeitnow-client /libs/arbeitnow-client
+COPY justjoinit-scraper /libs/justjoinit-scraper
+RUN pip install --no-cache-dir /libs/adzuna-client /libs/arbeitnow-client /libs/justjoinit-scraper
+
+COPY career-copilot/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src ./src
-COPY scripts ./scripts
+COPY career-copilot/src ./src
+COPY career-copilot/scripts ./scripts
 
 EXPOSE 8000
 
