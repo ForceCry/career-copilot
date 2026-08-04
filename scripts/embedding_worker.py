@@ -29,7 +29,7 @@ METRICS_PORT = 9100
 VACANCIES_PROCESSED = Counter(
     "embedding_worker_vacancies_processed_total",
     "Vacancies consumed from vacancy.embed",
-    ["status"],  # "indexed" | "not_found"
+    ["status"],  # "indexed" | "not_found" | "failed"
 )
 PROCESSING_DURATION = Histogram(
     "embedding_worker_processing_seconds",
@@ -47,16 +47,31 @@ def main() -> None:
     channel.basic_qos(prefetch_count=1)
 
     def on_message(ch, method, _properties, body):
-        vacancy_id = int(body.decode())
         start = time.monotonic()
-        with Session(engine) as session:
-            found = index_vacancy(session, vacancy_id)
-        PROCESSING_DURATION.observe(time.monotonic() - start)
-        VACANCIES_PROCESSED.labels(status="indexed" if found else "not_found").inc()
-
-        status = "indexed" if found else "not found, skipped"
-        print(f"[embedding-worker] vacancy {vacancy_id}: {status}", flush=True)
-        ch.basic_ack(delivery_tag=method.delivery_tag)
+        try:
+            vacancy_id = int(body.decode())
+            with Session(engine) as session:
+                found = index_vacancy(session, vacancy_id)
+            status = "indexed" if found else "not_found"
+            print(f"[embedding-worker] vacancy {vacancy_id}: {status}", flush=True)
+        except Exception as exc:
+            # A message that always fails to process (bad body, TEI/ES
+            # down, malformed data) must not be allowed to block every
+            # message behind it forever. Without this, an unhandled
+            # exception here crashes the process; RabbitMQ redelivers the
+            # same unacked message on reconnect, and prefetch_count=1
+            # means nothing else gets consumed until it's gone - a real
+            # poison-message failure mode, not a hypothetical one, caught
+            # by an independent Codex review of this exact code. Acking
+            # and moving on trades "silently drop this one" for "stay
+            # alive" - the right tradeoff for a queue with no dead-letter
+            # exchange configured yet.
+            status = "failed"
+            print(f"[embedding-worker] message failed, acking and continuing: {exc!r}", flush=True)
+        finally:
+            PROCESSING_DURATION.observe(time.monotonic() - start)
+            VACANCIES_PROCESSED.labels(status=status).inc()
+            ch.basic_ack(delivery_tag=method.delivery_tag)
 
     channel.basic_consume(queue=VACANCY_EMBED_QUEUE, on_message_callback=on_message)
     print("[embedding-worker] waiting for messages...", flush=True)

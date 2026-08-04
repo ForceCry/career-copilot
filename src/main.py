@@ -1,10 +1,11 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 load_dotenv()  # docker-compose injects env vars directly via env_file; local
@@ -15,7 +16,8 @@ from .documents.resume import render_resume_html  # noqa: E402
 from .ingestion.models import Vacancy  # noqa: E402
 from .matching.llm_scorer import llm_rerank  # noqa: E402
 from .matching.vector_scorer import VectorMatchResult, vector_search  # noqa: E402
-from .storage.db import get_session, init_db  # noqa: E402
+from .search.es_client import get_client as get_es_client  # noqa: E402
+from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import Profile, ResumeVersion  # noqa: E402
 from .storage.vacancy_repo import get_vacancies_by_ids, query_vacancies  # noqa: E402
 
@@ -32,6 +34,28 @@ def on_startup():
 
 @app.get("/health")
 def health():
+    # Previously always returned ok regardless of MySQL/ES reachability -
+    # an independent Codex review pointed out that lets orchestration
+    # route traffic to an instance that can't actually serve anything.
+    # TEI/RabbitMQ aren't checked: the app degrades gracefully without
+    # them (no vector search / no embedding pipeline progress) rather
+    # than failing every request, so they're not "is this API healthy"
+    # signals the same way MySQL/ES are.
+    problems = []
+    try:
+        with Session(engine) as session:
+            session.exec(text("SELECT 1"))
+    except Exception as exc:
+        problems.append(f"mysql: {exc}")
+
+    try:
+        if not get_es_client().ping():
+            problems.append("elasticsearch: ping failed")
+    except Exception as exc:
+        problems.append(f"elasticsearch: {exc}")
+
+    if problems:
+        raise HTTPException(503, {"status": "unhealthy", "problems": problems})
     return {"status": "ok"}
 
 
@@ -88,9 +112,15 @@ def _compute_recommendations(
 @app.get("/recommendations")
 def recommendations(
     sources: str = "",
-    min_score: int = 0,
-    top_k: int = 20,
-    llm_rerank_top_n: int = 0,
+    min_score: int = Query(0, ge=0, le=100),
+    # Unbounded top_k/llm_rerank_top_n let a caller force oversized kNN
+    # requests or trigger many Claude subprocess calls per request -
+    # flagged by an independent Codex review. There's no auth on this
+    # API (single-user local tool, see docker-compose.yml's port
+    # binding), so this cap is the only thing standing between "normal
+    # use" and "someone scripts a loop against it."
+    top_k: int = Query(20, ge=1, le=100),
+    llm_rerank_top_n: int = Query(0, ge=0, le=20),
     session: Session = Depends(get_session),
 ):
     profile = session.exec(select(Profile)).first()
@@ -107,9 +137,9 @@ def recommendations(
 def index(
     request: Request,
     sources: str = "",
-    min_score: int = 0,
-    top_k: int = 20,
-    llm_rerank_top_n: int = 0,
+    min_score: int = Query(0, ge=0, le=100),
+    top_k: int = Query(20, ge=1, le=100),
+    llm_rerank_top_n: int = Query(0, ge=0, le=20),
     session: Session = Depends(get_session),
 ):
     profile = session.exec(select(Profile)).first()

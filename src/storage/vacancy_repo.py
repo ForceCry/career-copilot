@@ -8,15 +8,20 @@ from .models import VacancyRecord
 
 def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tuple[int, int, list[int]]:
     """Insert new vacancies, refresh last_seen_at on ones already stored.
-    Returns (new_count, updated_count, new_ids) - new_ids is what callers
-    should queue for embedding. Re-embedding on every refresh of an
-    unchanged posting would be wasted TEI/ES work for the common case
-    (re-ingesting a still-open posting), so only genuinely new vacancies
-    get queued here; a deliberate reindex is a separate concern."""
+    Returns (new_count, updated_count, to_embed_ids) - to_embed_ids is
+    what callers should queue for embedding: every genuinely new vacancy,
+    plus any existing one whose title/description actually changed.
+    Re-embedding on every refresh regardless would be wasted TEI/ES work
+    for the common case (re-ingesting a still-open, unedited posting) -
+    but skipping re-embeds unconditionally was a real bug, caught by an
+    independent Codex review: an edited posting's MySQL row got the new
+    text while its Elasticsearch vector stayed permanently stale, since
+    nothing would ever re-queue it."""
     now = datetime.utcnow()
     new_count = 0
     updated_count = 0
     new_records: list[VacancyRecord] = []
+    changed_ids: list[int] = []
 
     for v in vacancies:
         existing = session.exec(
@@ -26,6 +31,8 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
         ).first()
 
         if existing:
+            if existing.title != v.title or existing.description != v.description:
+                changed_ids.append(existing.id)
             existing.title = v.title
             existing.company = v.company
             existing.location = v.location
@@ -67,9 +74,9 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
             new_count += 1
 
     session.flush()  # assigns autoincrement ids to new_records before commit
-    new_ids = [r.id for r in new_records]
+    to_embed_ids = [r.id for r in new_records] + changed_ids
     session.commit()
-    return new_count, updated_count, new_ids
+    return new_count, updated_count, to_embed_ids
 
 
 def _to_ingestion_vacancy(record: VacancyRecord) -> IngestionVacancy:

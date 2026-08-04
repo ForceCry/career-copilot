@@ -59,11 +59,20 @@ def main() -> None:
     print(f"[{args.source}] fetched {len(vacancies)} vacancies")
 
     with Session(engine) as session:
-        new_count, updated_count, new_ids = upsert_vacancies(session, vacancies)
+        new_count, updated_count, to_embed_ids = upsert_vacancies(session, vacancies)
     print(f"[{args.source}] upserted: {new_count} new, {updated_count} refreshed")
 
-    publish_vacancy_ids(new_ids)
-    print(f"[{args.source}] queued {len(new_ids)} new vacancies for embedding")
+    try:
+        publish_vacancy_ids(to_embed_ids)
+        print(f"[{args.source}] queued {len(to_embed_ids)} vacancies for embedding")
+    except Exception as exc:
+        # The MySQL upsert above already committed - these vacancies are
+        # now "existing" for every future ingest run, so they'll never
+        # get queued again on their own if this fails silently. Caught by
+        # an independent Codex review: don't let that happen quietly.
+        print(f"[{args.source}] FAILED to queue {len(to_embed_ids)} vacancies for embedding: {exc!r}")
+        print(f"[{args.source}] run scripts/backfill_embeddings.py to recover - it queues everything, not just new ids")
+        raise
 
 
 if __name__ == "__main__":

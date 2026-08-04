@@ -4,7 +4,12 @@ services:
       context: ..  # needs to reach sibling adzuna-client/arbeitnow-client/justjoinit-scraper repos
       dockerfile: career-copilot/Dockerfile
     ports:
-      - "8000:8000"
+      # Bound to loopback, not every interface - candidate PII, and
+      # unauthenticated endpoints that trigger paid Claude calls, aren't
+      # meant to be reachable from the LAN. Flagged by an independent
+      # Codex review (same class of finding as career-copilot-infra's
+      # embedding service, fixed the same way there already).
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     depends_on:
@@ -32,7 +37,7 @@ services:
       dockerfile: career-copilot/Dockerfile
     command: ["python", "scripts/embedding_worker.py"]
     ports:
-      - "9100:9100"  # Prometheus metrics, exposed for local inspection too
+      - "127.0.0.1:9100:9100"  # Prometheus metrics, exposed for local inspection too
     env_file:
       - .env
     depends_on:
@@ -50,7 +55,7 @@ services:
   mysql:
     image: mysql:8
     ports:
-      - "3306:3306"  # exposed for local (non-Docker) dev too, not just the api container
+      - "127.0.0.1:3306:3306"  # exposed for local (non-Docker) dev too, not just the api container
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-career_copilot}
@@ -68,9 +73,12 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
     ports:
-      - "9200:9200"  # exposed for local (non-Docker) dev too
+      - "127.0.0.1:9200:9200"  # exposed for local (non-Docker) dev too
     environment:
       discovery.type: single-node
+      # No auth (xpack.security disabled) is only an acceptable trade
+      # because this is bound to loopback, single-user, local-only - not
+      # a default to copy into anything that touches a real network.
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
     volumes:
@@ -90,9 +98,9 @@ services:
       bash -c "rabbitmq-plugins enable --offline rabbitmq_prometheus &&
       docker-entrypoint.sh rabbitmq-server"
     ports:
-      - "5672:5672"    # AMQP, exposed for local (non-Docker) dev too
-      - "15672:15672"  # management UI
-      - "15692:15692"  # Prometheus metrics
+      - "127.0.0.1:5672:5672"    # AMQP, exposed for local (non-Docker) dev too
+      - "127.0.0.1:15672:15672"  # management UI (default guest/guest - loopback-only is what makes that acceptable)
+      - "127.0.0.1:15692:15692"  # Prometheus metrics
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
@@ -108,7 +116,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -120,8 +128,11 @@ services:
   grafana:
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
+      # Anonymous admin access is only acceptable because this is
+      # loopback-only, single-user - flagged correctly by an independent
+      # Codex review as a real risk if it were ever reachable from the LAN.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
     volumes:
