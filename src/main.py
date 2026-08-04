@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from prometheus_fastapi_instrumentator import Instrumentator
 from sqlmodel import Session, select
 
 load_dotenv()  # docker-compose injects env vars directly via env_file; local
@@ -20,6 +21,8 @@ from .storage.vacancy_repo import get_vacancies_by_ids, query_vacancies  # noqa:
 
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+Instrumentator().instrument(app).expose(app)  # request rate/latency/status at GET /metrics
 
 
 @app.on_event("startup")

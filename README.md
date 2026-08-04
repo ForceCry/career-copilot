@@ -125,6 +125,33 @@ cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 .venv/bin/uvicorn src.main:app --reload
 ```
 
+## Monitoring
+
+Prometheus + Grafana, both in this project's own compose (not the shared
+infra repo - what's being monitored is career-copilot-specific). Grafana
+at http://localhost:3000 comes pre-provisioned with a Prometheus
+datasource and a `career-copilot` dashboard - no manual setup.
+
+Four scrape targets:
+- **RabbitMQ** - built-in Prometheus plugin, enabled via `command:` in
+  docker-compose.yml (not on by default even in the -management image).
+  Scraped from `/metrics/per-object`, not the default `/metrics` - the
+  default path only exposes cluster-wide aggregates with no `queue`
+  label, confirmed live; per-queue depth (what the dashboard needs)
+  only exists on the per-object path.
+- **TEI** (the embedding service, in career-copilot-infra) - exposes
+  metrics on its main port (80) at `/metrics`, not the separate port
+  9000 `--help` suggests - confirmed live (nothing listens on 9000).
+- **api** - instrumented with `prometheus-fastapi-instrumentator`,
+  request rate/latency/status at `GET /metrics`.
+- **embedding-worker** - custom metrics via `prometheus_client`
+  (`embedding_worker_vacancies_processed_total`,
+  `embedding_worker_processing_seconds`), served on its own port 9100.
+  Only meaningful for a single replica - scaling it (as the backfill
+  script's README section describes) means Prometheus's static target
+  resolves to whichever replica Docker's DNS round-robin picks that
+  scrape, not a sum across all of them.
+
 ## Privacy
 
 Personal data (profile, resume drafts, local DB) never goes into the repo —

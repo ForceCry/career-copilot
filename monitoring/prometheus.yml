@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: rabbitmq
+    # Default /metrics is cluster-wide aggregates with no `queue` label -
+    # confirmed live, per-queue breakdown (needed for the vacancy.embed
+    # panels) only exists on /metrics/per-object.
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  - job_name: tei
+    # Despite --prometheus-port defaulting to 9000 in `--help`, metrics are
+    # actually served on the main port (80) at /metrics - confirmed live,
+    # nothing listens on 9000 (checked /proc/net/tcp inside the container).
+    static_configs:
+      - targets: ["embeddings:80"]
+
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: embedding-worker
+    static_configs:
+      - targets: ["embedding-worker:9100"]

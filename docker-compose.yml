@@ -31,6 +31,8 @@ services:
       context: ..  # needs to reach sibling adzuna-client/arbeitnow-client/justjoinit-scraper repos
       dockerfile: career-copilot/Dockerfile
     command: ["python", "scripts/embedding_worker.py"]
+    ports:
+      - "9100:9100"  # Prometheus metrics, exposed for local inspection too
     env_file:
       - .env
     depends_on:
@@ -82,9 +84,15 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management
+    # Enables the built-in Prometheus plugin (metrics on :15692) before
+    # starting the broker - not on by default even in the -management image.
+    command: >
+      bash -c "rabbitmq-plugins enable --offline rabbitmq_prometheus &&
+      docker-entrypoint.sh rabbitmq-server"
     ports:
       - "5672:5672"    # AMQP, exposed for local (non-Docker) dev too
       - "15672:15672"  # management UI
+      - "15692:15692"  # Prometheus metrics
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
@@ -97,6 +105,30 @@ services:
       retries: 10
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - default
+      - career-copilot-external  # to reach TEI's metrics endpoint
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
 networks:
   default:
   career-copilot-external:
@@ -106,3 +138,5 @@ volumes:
   mysql-data:
   es-data:
   rabbitmq-data:
+  prometheus-data:
+  grafana-data:
