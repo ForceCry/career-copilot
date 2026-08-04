@@ -6,12 +6,17 @@ from ..ingestion.models import Vacancy as IngestionVacancy
 from .models import VacancyRecord
 
 
-def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tuple[int, int]:
+def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tuple[int, int, list[int]]:
     """Insert new vacancies, refresh last_seen_at on ones already stored.
-    Returns (new_count, updated_count)."""
+    Returns (new_count, updated_count, new_ids) - new_ids is what callers
+    should queue for embedding. Re-embedding on every refresh of an
+    unchanged posting would be wasted TEI/ES work for the common case
+    (re-ingesting a still-open posting), so only genuinely new vacancies
+    get queued here; a deliberate reindex is a separate concern."""
     now = datetime.utcnow()
     new_count = 0
     updated_count = 0
+    new_records: list[VacancyRecord] = []
 
     for v in vacancies:
         existing = session.exec(
@@ -38,31 +43,33 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
             session.add(existing)
             updated_count += 1
         else:
-            session.add(
-                VacancyRecord(
-                    source=v.source,
-                    external_id=v.external_id,
-                    title=v.title,
-                    company=v.company,
-                    location=v.location,
-                    remote=v.remote,
-                    url=v.url,
-                    description=v.description,
-                    tags=",".join(v.tags),
-                    posted_at=v.created_at,
-                    salary_min=v.salary_min,
-                    salary_max=v.salary_max,
-                    salary_currency=v.salary_currency,
-                    salary_period=v.salary_period,
-                    salary_is_predicted=v.salary_is_predicted,
-                    first_seen_at=now,
-                    last_seen_at=now,
-                )
+            record = VacancyRecord(
+                source=v.source,
+                external_id=v.external_id,
+                title=v.title,
+                company=v.company,
+                location=v.location,
+                remote=v.remote,
+                url=v.url,
+                description=v.description,
+                tags=",".join(v.tags),
+                posted_at=v.created_at,
+                salary_min=v.salary_min,
+                salary_max=v.salary_max,
+                salary_currency=v.salary_currency,
+                salary_period=v.salary_period,
+                salary_is_predicted=v.salary_is_predicted,
+                first_seen_at=now,
+                last_seen_at=now,
             )
+            session.add(record)
+            new_records.append(record)
             new_count += 1
 
+    session.flush()  # assigns autoincrement ids to new_records before commit
+    new_ids = [r.id for r in new_records]
     session.commit()
-    return new_count, updated_count
+    return new_count, updated_count, new_ids
 
 
 def _to_ingestion_vacancy(record: VacancyRecord) -> IngestionVacancy:

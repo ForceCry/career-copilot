@@ -32,6 +32,7 @@ from sqlmodel import Session  # noqa: E402
 from src.ingestion.sources.adzuna import AdzunaSource  # noqa: E402
 from src.ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
 from src.ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
+from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
 from src.storage.db import engine, init_db  # noqa: E402
 from src.storage.vacancy_repo import upsert_vacancies  # noqa: E402
 
@@ -58,8 +59,11 @@ def main() -> None:
     print(f"[{args.source}] fetched {len(vacancies)} vacancies")
 
     with Session(engine) as session:
-        new_count, updated_count = upsert_vacancies(session, vacancies)
+        new_count, updated_count, new_ids = upsert_vacancies(session, vacancies)
     print(f"[{args.source}] upserted: {new_count} new, {updated_count} refreshed")
+
+    publish_vacancy_ids(new_ids)
+    print(f"[{args.source}] queued {len(new_ids)} new vacancies for embedding")
 
 
 if __name__ == "__main__":
