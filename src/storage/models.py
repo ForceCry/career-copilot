@@ -1,7 +1,11 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import Column, Text
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class Profile(SQLModel, table=True):
@@ -67,7 +71,7 @@ class ResumeVersion(SQLModel, table=True):
     profile_id: int = Field(foreign_key="profile.id")
     label: str = ""
     content_html: str = Field(sa_column=Column(Text))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
     is_active: bool = False
 
     profile: Profile = Relationship(back_populates="resume_versions")
@@ -98,8 +102,8 @@ class VacancyRecord(SQLModel, table=True):
     salary_currency: str = ""
     salary_period: str = ""  # "year" | "month" | "hour" | ""
     salary_is_predicted: bool = False
-    first_seen_at: datetime = Field(default_factory=datetime.utcnow)
-    last_seen_at: datetime = Field(default_factory=datetime.utcnow)
+    first_seen_at: datetime = Field(default_factory=_utcnow)
+    last_seen_at: datetime = Field(default_factory=_utcnow)
     # NULL means "not confirmed queued for embedding yet" - set only after
     # RabbitMQ actually confirms receiving the publish (see
     # messaging/rabbitmq.py), not just after upsert_vacancies decides it

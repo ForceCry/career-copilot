@@ -27,6 +27,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY career-copilot/src ./src
 COPY career-copilot/scripts ./scripts
+COPY career-copilot/alembic ./alembic
+COPY career-copilot/alembic.ini .
 
 EXPOSE 8000
 

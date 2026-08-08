@@ -1,17 +1,15 @@
-import os
-
 import pika
+
+from ..settings import settings
 
 VACANCY_EMBED_QUEUE = "vacancy.embed"
 
 
 def _connection_params() -> pika.ConnectionParameters:
-    host = os.environ.get("RABBITMQ_HOST", "rabbitmq")
-    port = int(os.environ.get("RABBITMQ_PORT", "5672"))
-    user = os.environ.get("RABBITMQ_USER", "guest")
-    password = os.environ.get("RABBITMQ_PASSWORD", "guest")
     return pika.ConnectionParameters(
-        host=host, port=port, credentials=pika.PlainCredentials(user, password)
+        host=settings.rabbitmq_host,
+        port=settings.rabbitmq_port,
+        credentials=pika.PlainCredentials(settings.rabbitmq_user, settings.rabbitmq_password),
     )
 
 

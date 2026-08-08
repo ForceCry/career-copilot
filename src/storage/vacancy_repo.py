@@ -1,9 +1,13 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
 from ..ingestion.models import Vacancy as IngestionVacancy
 from .models import VacancyRecord
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tuple[int, int, list[int]]:
@@ -17,7 +21,7 @@ def upsert_vacancies(session: Session, vacancies: list[IngestionVacancy]) -> tup
     independent Codex review: an edited posting's MySQL row got the new
     text while its Elasticsearch vector stayed permanently stale, since
     nothing would ever re-queue it."""
-    now = datetime.utcnow()
+    now = _utcnow()
     new_count = 0
     updated_count = 0
     new_records: list[VacancyRecord] = []
@@ -91,7 +95,7 @@ def mark_embedding_queued(session: Session, vacancy_ids: list[int]) -> None:
     remembered backfill for the common case."""
     if not vacancy_ids:
         return
-    now = datetime.utcnow()
+    now = _utcnow()
     records = session.exec(select(VacancyRecord).where(VacancyRecord.id.in_(vacancy_ids))).all()
     for record in records:
         record.embedding_queued_at = now

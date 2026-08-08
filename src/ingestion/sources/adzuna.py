@@ -1,8 +1,7 @@
-import os
-
 from adzuna_client import AdzunaClient
 from adzuna_client import Job as AdzunaJob
 
+from ...settings import AdzunaSettings
 from ..models import Vacancy
 from .base import VacancySource
 
@@ -16,9 +15,14 @@ class AdzunaSource(VacancySource):
     name = "adzuna"
 
     def __init__(self, **client_kwargs):
+        # AdzunaSettings is separate from the shared Settings object - these
+        # credentials are only needed when this specific source is used, so
+        # validating them here (not at app startup) keeps the API/worker
+        # from failing to start for anyone who isn't using Adzuna.
+        credentials = AdzunaSettings()
         self._client = AdzunaClient(
-            app_id=os.environ["ADZUNA_APP_ID"],
-            app_key=os.environ["ADZUNA_APP_KEY"],
+            app_id=credentials.app_id,
+            app_key=credentials.app_key,
             **client_kwargs,
         )
 

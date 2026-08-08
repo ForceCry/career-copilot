@@ -1,6 +1,6 @@
-import os
-
 from elasticsearch import BadRequestError, Elasticsearch
+
+from ..settings import settings
 
 VACANCY_INDEX = "vacancies"
 EMBEDDING_DIMS = 768  # multilingual-e5-base
@@ -23,8 +23,7 @@ _MAPPING = {
 
 
 def get_client() -> Elasticsearch:
-    host = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-    return Elasticsearch(host)
+    return Elasticsearch(settings.elasticsearch_url)
 
 
 def ensure_index(client: Elasticsearch) -> None:
