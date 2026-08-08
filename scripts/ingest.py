@@ -44,7 +44,9 @@ SOURCES = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--source", required=True, choices=sorted(SOURCES))
     parser.add_argument("--keywords", default="php,symfony,backend")
     parser.add_argument("--location", default="Warsaw")

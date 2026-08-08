@@ -11,9 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import time
+import time  # noqa: E402
 
-import httpx
+import httpx  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -14,9 +13,9 @@ class Vacancy(BaseModel):
     url: str
     description: str
     tags: list[str] = []
-    created_at: Optional[datetime] = None
-    salary_min: Optional[float] = None
-    salary_max: Optional[float] = None
+    created_at: datetime | None = None
+    salary_min: float | None = None
+    salary_max: float | None = None
     salary_currency: str = ""
     salary_period: str = ""  # "year" | "month" | "hour" | ""
     salary_is_predicted: bool = False  # Adzuna-specific: estimated, not stated

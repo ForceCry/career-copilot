@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from typing import Optional
 
 from sqlalchemy import Column, Text
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
@@ -10,7 +9,7 @@ class Profile(SQLModel, table=True):
     modeling it as a real table (not a config singleton) keeps the door
     open for resume variants per target role later."""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     full_name: str
     location: str = ""
     email: str = ""
@@ -27,7 +26,7 @@ class Profile(SQLModel, table=True):
 
 
 class Skill(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     profile_id: int = Field(foreign_key="profile.id")
     name: str
     category: str = ""  # "language" | "framework" | "tool" | ...
@@ -36,26 +35,26 @@ class Skill(SQLModel, table=True):
 
 
 class Experience(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     profile_id: int = Field(foreign_key="profile.id")
     title: str
     company: str
     location: str = ""
     start_date: date
-    end_date: Optional[date] = None  # None = current position
+    end_date: date | None = None  # None = current position
     highlights: str = Field(default="", sa_column=Column(Text))  # newline-separated bullet points
 
     profile: Profile = Relationship(back_populates="experiences")
 
 
 class Education(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     profile_id: int = Field(foreign_key="profile.id")
     institution: str
     degree: str
     field: str = ""
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
+    start_date: date | None = None
+    end_date: date | None = None
 
     profile: Profile = Relationship(back_populates="educations")
 
@@ -64,7 +63,7 @@ class ResumeVersion(SQLModel, table=True):
     """A generated/edited resume snapshot. New versions are appended, never
     overwritten in place, so past tailored versions stay recoverable."""
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     profile_id: int = Field(foreign_key="profile.id")
     label: str = ""
     content_html: str = Field(sa_column=Column(Text))
@@ -83,7 +82,7 @@ class VacancyRecord(SQLModel, table=True):
     __tablename__ = "vacancy"
     __table_args__ = (UniqueConstraint("source", "external_id", name="uq_vacancy_source_external_id"),)
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     source: str = Field(index=True)
     external_id: str
     title: str
@@ -93,9 +92,9 @@ class VacancyRecord(SQLModel, table=True):
     url: str = Field(sa_column=Column(Text))
     description: str = Field(default="", sa_column=Column(Text))
     tags: str = Field(default="", sa_column=Column(Text))  # comma-separated - no native array type
-    posted_at: Optional[datetime] = None  # from the source, if it provides one
-    salary_min: Optional[float] = None
-    salary_max: Optional[float] = None
+    posted_at: datetime | None = None  # from the source, if it provides one
+    salary_min: float | None = None
+    salary_max: float | None = None
     salary_currency: str = ""
     salary_period: str = ""  # "year" | "month" | "hour" | ""
     salary_is_predicted: bool = False
@@ -109,4 +108,4 @@ class VacancyRecord(SQLModel, table=True):
     # non-recoverable steps) leaves this NULL, so the next ingest run -
     # even an otherwise-unchanged one - naturally re-queues it instead of
     # requiring someone to remember to run the backfill script.
-    embedding_queued_at: Optional[datetime] = None
+    embedding_queued_at: datetime | None = None
