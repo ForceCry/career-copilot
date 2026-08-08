@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.documents.resume import render_resume_html  # noqa: E402
-from src.storage.models import Experience, Profile  # noqa: E402
+from src.storage.models import Experience, Profile, Skill  # noqa: E402
 
 
 def _profile(**overrides) -> Profile:
@@ -47,3 +47,18 @@ def test_experience_highlights_are_escaped():
     html = render_resume_html(profile)
 
     assert "<img src=x onerror=alert(1)>" not in html
+
+
+def test_skills_separator_is_not_double_escaped():
+    """Regression: the skills-line template joined skill names with the
+    literal HTML entity '&bull;' inside a {{ }} expression - once
+    autoescape was turned on (see test_profile_text_is_escaped_not_
+    rendered_as_html), Jinja escaped that literal '&' too, producing
+    '&amp;bull;' in the rendered output instead of a bullet character."""
+    profile = _profile()
+    profile.skills = [Skill(name="PHP", category="language"), Skill(name="MySQL", category="tool")]
+
+    html = render_resume_html(profile)
+
+    assert "&amp;bull;" not in html
+    assert "PHP • MySQL" in html
