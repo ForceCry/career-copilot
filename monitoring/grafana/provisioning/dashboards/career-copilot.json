@@ -125,6 +125,35 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 9,
+      "title": "LLM call rate (by outcome)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (operation, outcome) (rate(llm_calls_total[5m]))",
+          "legendFormat": "{{operation}} [{{outcome}}]",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "LLM call duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(llm_call_seconds_bucket[5m])))",
+          "legendFormat": "{{operation}}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

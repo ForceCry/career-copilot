@@ -1,5 +1,4 @@
 import sys
-from logging.config import fileConfig
 from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool
@@ -15,6 +14,7 @@ load_dotenv(ROOT / ".env")
 
 from sqlmodel import SQLModel  # noqa: E402
 
+from src.observability import configure_logging  # noqa: E402
 from src.settings import settings  # noqa: E402
 from src.storage import models  # noqa: E402,F401 - registers tables on SQLModel.metadata
 
@@ -22,10 +22,16 @@ from src.storage import models  # noqa: E402,F401 - registers tables on SQLModel
 # access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Deliberately NOT calling fileConfig(config.config_file_name) here, unlike
+# alembic's default template - confirmed live that it unconditionally
+# replaces the root logger's handler/level, which would silently swap out
+# the app's JSON logging (src/observability.py) for a plain-text one at
+# WARNING level on every `alembic upgrade head` call (i.e. every app/script
+# startup via init_db()). configure_logging() is idempotent, so calling it
+# here too is enough to guarantee alembic's own log messages go through
+# the same structured handler even when env.py runs standalone (`alembic`
+# CLI) rather than via init_db().
+configure_logging()
 
 # Overrides alembic.ini's placeholder URL with the same builder db.py's
 # engine uses, so migrations always target whatever MYSQL_* env vars the

@@ -16,10 +16,13 @@ from .documents.resume import render_resume_html  # noqa: E402
 from .ingestion.models import Vacancy  # noqa: E402
 from .matching.llm_scorer import llm_rerank  # noqa: E402
 from .matching.vector_scorer import VectorMatchResult, vector_search  # noqa: E402
+from .observability import configure_logging  # noqa: E402
 from .search.es_client import get_client as get_es_client  # noqa: E402
 from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import Profile, ResumeVersion  # noqa: E402
 from .storage.vacancy_repo import get_vacancies_by_ids, query_vacancies  # noqa: E402
+
+configure_logging()
 
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

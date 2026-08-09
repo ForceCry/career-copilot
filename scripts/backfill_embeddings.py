@@ -14,6 +14,7 @@ re-embedding overwrites rather than duplicates).
 
 Run: .venv/bin/python scripts/backfill_embeddings.py
 """
+import logging
 import sys
 from pathlib import Path
 
@@ -27,11 +28,15 @@ load_dotenv(ROOT / ".env")
 from sqlmodel import Session, select  # noqa: E402
 
 from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
+from src.observability import configure_logging  # noqa: E402
 from src.storage.db import engine  # noqa: E402
 from src.storage.models import VacancyRecord  # noqa: E402
 from src.storage.vacancy_repo import mark_embedding_queued  # noqa: E402
 
+logger = logging.getLogger("backfill_embeddings")
+
 if __name__ == "__main__":
+    configure_logging()
     with Session(engine) as session:
         ids = session.exec(select(VacancyRecord.id)).all()
 
@@ -42,6 +47,7 @@ if __name__ == "__main__":
             mark_embedding_queued(session, confirmed_ids)
 
     unconfirmed = len(ids) - len(confirmed_ids)
-    print(f"Queued {len(confirmed_ids)} vacancies for (re-)embedding" + (
-        f" ({unconfirmed} not confirmed by the broker - rerun to retry those)" if unconfirmed else ""
-    ))
+    logger.info(
+        "backfill finished",
+        extra={"total": len(ids), "queued": len(confirmed_ids), "unconfirmed": unconfirmed},
+    )

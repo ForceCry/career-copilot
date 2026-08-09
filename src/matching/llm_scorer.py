@@ -1,13 +1,18 @@
 import json
+import logging
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from ..ingestion.models import Vacancy
+from ..observability import LLM_CALL_DURATION, LLM_CALLS
 from ..storage.models import Profile
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -71,37 +76,90 @@ def _extract_json(raw: str) -> dict:
     return json.loads(content)
 
 
+_OPERATION = "score_vacancy"
+
+
 def llm_score_vacancy(
     vacancy_id: int, vacancy: Vacancy, profile: Profile, model: str = "haiku", timeout: float = 30.0
 ) -> LlmMatchResult | None:
     prompt = _build_prompt(vacancy, profile)
 
-    with _CONCURRENCY_LIMIT:
-        process = subprocess.run(
-            [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--model", model,
-                "--allowedTools", "",
-                "--system-prompt", SYSTEM_PROMPT,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=PROJECT_ROOT,
+    start = time.monotonic()
+    try:
+        with _CONCURRENCY_LIMIT:
+            process = subprocess.run(
+                [
+                    "claude", "-p", prompt,
+                    "--output-format", "json",
+                    "--model", model,
+                    "--allowedTools", "",
+                    "--system-prompt", SYSTEM_PROMPT,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=PROJECT_ROOT,
+            )
+    except subprocess.TimeoutExpired:
+        LLM_CALL_DURATION.labels(operation=_OPERATION).observe(time.monotonic() - start)
+        LLM_CALLS.labels(operation=_OPERATION, outcome="timeout").inc()
+        logger.warning(
+            "llm call timed out",
+            extra={"operation": _OPERATION, "vacancy_id": vacancy_id, "timeout": timeout},
         )
+        return None
+    LLM_CALL_DURATION.labels(operation=_OPERATION).observe(time.monotonic() - start)
+
     if process.returncode != 0:
+        LLM_CALLS.labels(operation=_OPERATION, outcome="nonzero_exit").inc()
+        logger.warning(
+            "llm call exited non-zero",
+            extra={
+                "operation": _OPERATION, "vacancy_id": vacancy_id,
+                "returncode": process.returncode, "stderr": process.stderr[:500],
+            },
+        )
         return None
 
-    envelope = json.loads(process.stdout)
+    # --output-format json should always produce valid JSON on stdout, but
+    # this shells out to an external CLI - previously unguarded, so any
+    # unexpected stdout content would crash the whole request with an
+    # uncaught JSONDecodeError instead of just failing this one vacancy.
+    try:
+        envelope = json.loads(process.stdout)
+    except json.JSONDecodeError:
+        LLM_CALLS.labels(operation=_OPERATION, outcome="bad_stdout").inc()
+        logger.warning(
+            "llm call produced non-JSON stdout",
+            extra={"operation": _OPERATION, "vacancy_id": vacancy_id, "stdout": process.stdout[:500]},
+        )
+        return None
+
     if envelope.get("is_error"):
+        LLM_CALLS.labels(operation=_OPERATION, outcome="api_error").inc()
+        logger.warning(
+            "llm call reported an error",
+            extra={
+                "operation": _OPERATION, "vacancy_id": vacancy_id,
+                "result": str(envelope.get("result"))[:500],
+            },
+        )
         return None
 
     try:
         payload = _extract_json(envelope["result"])
     except (json.JSONDecodeError, KeyError):
+        LLM_CALLS.labels(operation=_OPERATION, outcome="parse_error").inc()
+        logger.warning(
+            "llm call result did not parse as the expected JSON",
+            extra={
+                "operation": _OPERATION, "vacancy_id": vacancy_id,
+                "result": str(envelope.get("result"))[:500],
+            },
+        )
         return None
 
+    LLM_CALLS.labels(operation=_OPERATION, outcome="success").inc()
     return LlmMatchResult(
         vacancy_id=vacancy_id,
         vacancy_title=vacancy.title,

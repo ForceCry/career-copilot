@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import logging  # noqa: E402
 import time  # noqa: E402
 
 import httpx  # noqa: E402
@@ -24,8 +25,11 @@ from sqlalchemy.exc import OperationalError  # noqa: E402
 from sqlmodel import Session  # noqa: E402
 
 from src.messaging.rabbitmq import VACANCY_EMBED_QUEUE, get_connection  # noqa: E402
+from src.observability import configure_logging  # noqa: E402
 from src.search.indexer import index_vacancy  # noqa: E402
 from src.storage.db import engine  # noqa: E402
+
+logger = logging.getLogger("embedding_worker")
 
 METRICS_PORT = 9100
 TRANSIENT_RETRY_BACKOFF_SECONDS = 5.0
@@ -51,8 +55,9 @@ PROCESSING_DURATION = Histogram(
 
 
 def main() -> None:
+    configure_logging()
     start_http_server(METRICS_PORT)
-    print(f"[embedding-worker] metrics on :{METRICS_PORT}/metrics", flush=True)
+    logger.info("metrics server started", extra={"port": METRICS_PORT})
 
     connection = get_connection()
     channel = connection.channel()
@@ -66,7 +71,7 @@ def main() -> None:
             with Session(engine) as session:
                 found = index_vacancy(session, vacancy_id)
             status = "indexed" if found else "not_found"
-            print(f"[embedding-worker] vacancy {vacancy_id}: {status}", flush=True)
+            logger.info("vacancy processed", extra={"vacancy_id": vacancy_id, "status": status})
             PROCESSING_DURATION.observe(time.monotonic() - start)
             VACANCIES_PROCESSED.labels(status=status).inc()
             ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -79,7 +84,7 @@ def main() -> None:
             # dependency with an immediate retry loop.
             PROCESSING_DURATION.observe(time.monotonic() - start)
             VACANCIES_PROCESSED.labels(status="retrying").inc()
-            print(f"[embedding-worker] transient failure, will retry: {exc!r}", flush=True)
+            logger.warning("transient failure, will retry", extra={"error": repr(exc)})
             time.sleep(TRANSIENT_RETRY_BACKOFF_SECONDS)
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
@@ -90,11 +95,11 @@ def main() -> None:
             # forever under prefetch_count=1.
             PROCESSING_DURATION.observe(time.monotonic() - start)
             VACANCIES_PROCESSED.labels(status="failed").inc()
-            print(f"[embedding-worker] message failed, acking and continuing: {exc!r}", flush=True)
+            logger.error("message failed, acking and continuing", extra={"error": repr(exc)})
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
     channel.basic_consume(queue=VACANCY_EMBED_QUEUE, on_message_callback=on_message)
-    print("[embedding-worker] waiting for messages...", flush=True)
+    logger.info("waiting for messages")
     channel.start_consuming()
 
 

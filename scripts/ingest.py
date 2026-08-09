@@ -17,7 +17,9 @@ Cron example (adjust paths):
   0 6 * * *     cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source justjoinit
 """
 import argparse
+import logging
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,8 +35,11 @@ from src.ingestion.sources.adzuna import AdzunaSource  # noqa: E402
 from src.ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
 from src.ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
 from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
+from src.observability import configure_logging  # noqa: E402
 from src.storage.db import engine, init_db  # noqa: E402
 from src.storage.vacancy_repo import mark_embedding_queued, upsert_vacancies  # noqa: E402
+
+logger = logging.getLogger("ingest")
 
 SOURCES = {
     "adzuna": AdzunaSource,
@@ -44,6 +49,7 @@ SOURCES = {
 
 
 def main() -> None:
+    configure_logging()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -52,28 +58,38 @@ def main() -> None:
     parser.add_argument("--location", default="Warsaw")
     args = parser.parse_args()
 
+    run_start = time.monotonic()
     init_db()
     source = SOURCES[args.source]()
     keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
 
-    print(f"[{args.source}] fetching (keywords={keywords}, location={args.location})...")
+    logger.info(
+        "fetching vacancies",
+        extra={"source": args.source, "keywords": keywords, "location": args.location},
+    )
     vacancies = source.fetch(keywords, args.location)
-    print(f"[{args.source}] fetched {len(vacancies)} vacancies")
+    logger.info("fetched vacancies", extra={"source": args.source, "fetched": len(vacancies)})
 
     with Session(engine) as session:
         new_count, updated_count, to_embed_ids = upsert_vacancies(session, vacancies)
-    print(f"[{args.source}] upserted: {new_count} new, {updated_count} refreshed")
+    logger.info(
+        "upserted vacancies",
+        extra={"source": args.source, "new": new_count, "updated": updated_count},
+    )
 
     try:
         confirmed_ids = publish_vacancy_ids(to_embed_ids)
-    except Exception as exc:
+    except Exception:
         # A total failure to even talk to RabbitMQ (vs. individual
         # messages not confirming) - nothing got marked queued, so the
         # next ingest run naturally retries everything in to_embed_ids on
         # its own (see vacancy_repo.upsert_vacancies: embedding_queued_at
         # stays NULL for all of them). Still surfaced loudly rather than
         # swallowed, since a persistently broken RabbitMQ needs attention.
-        print(f"[{args.source}] FAILED to queue {len(to_embed_ids)} vacancies for embedding: {exc!r}")
+        logger.exception(
+            "failed to queue vacancies for embedding",
+            extra={"source": args.source, "to_embed": len(to_embed_ids)},
+        )
         raise
 
     if confirmed_ids:
@@ -81,9 +97,18 @@ def main() -> None:
             mark_embedding_queued(session, confirmed_ids)
 
     unconfirmed = len(to_embed_ids) - len(confirmed_ids)
-    print(f"[{args.source}] queued {len(confirmed_ids)} vacancies for embedding" + (
-        f" ({unconfirmed} not confirmed by the broker - will retry on the next ingest)" if unconfirmed else ""
-    ))
+    logger.info(
+        "ingest run finished",
+        extra={
+            "source": args.source,
+            "fetched": len(vacancies),
+            "new": new_count,
+            "updated": updated_count,
+            "queued": len(confirmed_ids),
+            "unconfirmed": unconfirmed,
+            "duration_seconds": round(time.monotonic() - run_start, 2),
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -1,9 +1,14 @@
 import json
+import logging
 import subprocess
+import time
 from pathlib import Path
 
 from ..ingestion.models import Vacancy
+from ..observability import LLM_CALL_DURATION, LLM_CALLS
 from ..storage.models import Profile
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -57,35 +62,79 @@ elsewhere.
 """
 
 
-def _run_claude(prompt: str, system_prompt: str, model: str = "sonnet", timeout: float = 60.0) -> str:
+def _run_claude(
+    operation: str, prompt: str, system_prompt: str, model: str = "sonnet", timeout: float = 60.0
+) -> str:
     # Run from PROJECT_ROOT, same reasoning as matching/llm_scorer.py: an
     # unrelated cwd pulls its own memory/CLAUDE.md into context and
     # inflates cost. sonnet, not haiku, for writing quality here - unlike
     # scoring, the output is user-facing prose.
-    process = subprocess.run(
-        [
-            "claude", "-p", prompt,
-            "--output-format", "json",
-            "--model", model,
-            "--allowedTools", "",
-            "--system-prompt", system_prompt,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=PROJECT_ROOT,
-    )
-    process.check_returncode()
+    #
+    # Unlike llm_score_vacancy (which swallows failures to None, since a
+    # missed rerank result just means one fewer shortlist entry), this
+    # stays exception-raising - a cover letter/tailoring request has
+    # nothing useful to return on failure, so surfacing a 500 is more
+    # honest than silently returning empty content. It's now observed
+    # (metric + structured log) before re-raising, whereas previously a
+    # failure here (including a timeout, uncaught before this fix) left no
+    # trace anywhere.
+    start = time.monotonic()
+    try:
+        process = subprocess.run(
+            [
+                "claude", "-p", prompt,
+                "--output-format", "json",
+                "--model", model,
+                "--allowedTools", "",
+                "--system-prompt", system_prompt,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=PROJECT_ROOT,
+        )
+    except subprocess.TimeoutExpired:
+        LLM_CALL_DURATION.labels(operation=operation).observe(time.monotonic() - start)
+        LLM_CALLS.labels(operation=operation, outcome="timeout").inc()
+        logger.warning("llm call timed out", extra={"operation": operation, "timeout": timeout})
+        raise
+    LLM_CALL_DURATION.labels(operation=operation).observe(time.monotonic() - start)
 
-    envelope = json.loads(process.stdout)
+    try:
+        process.check_returncode()
+    except subprocess.CalledProcessError:
+        LLM_CALLS.labels(operation=operation, outcome="nonzero_exit").inc()
+        logger.warning(
+            "llm call exited non-zero",
+            extra={"operation": operation, "returncode": process.returncode, "stderr": process.stderr[:500]},
+        )
+        raise
+
+    try:
+        envelope = json.loads(process.stdout)
+    except json.JSONDecodeError:
+        LLM_CALLS.labels(operation=operation, outcome="bad_stdout").inc()
+        logger.warning(
+            "llm call produced non-JSON stdout",
+            extra={"operation": operation, "stdout": process.stdout[:500]},
+        )
+        raise
+
     if envelope.get("is_error"):
+        LLM_CALLS.labels(operation=operation, outcome="api_error").inc()
+        logger.warning(
+            "llm call reported an error",
+            extra={"operation": operation, "result": str(envelope.get("result"))[:500]},
+        )
         raise RuntimeError(f"claude CLI error: {envelope.get('result')}")
+
+    LLM_CALLS.labels(operation=operation, outcome="success").inc()
     return envelope["result"].strip()
 
 
 def generate_cover_letter(vacancy: Vacancy, profile: Profile) -> str:
-    return _run_claude(_build_context(vacancy, profile), COVER_LETTER_SYSTEM_PROMPT)
+    return _run_claude("cover_letter", _build_context(vacancy, profile), COVER_LETTER_SYSTEM_PROMPT)
 
 
 def suggest_resume_tailoring(vacancy: Vacancy, profile: Profile) -> str:
-    return _run_claude(_build_context(vacancy, profile), TAILORING_SYSTEM_PROMPT)
+    return _run_claude("tailoring_suggestions", _build_context(vacancy, profile), TAILORING_SYSTEM_PROMPT)
