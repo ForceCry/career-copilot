@@ -20,12 +20,20 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
-      - ./data:/app/data
-      # Read-only: the container can use the OAuth session to call `claude`,
-      # but can't write to or corrupt it. Both paths needed - .claude.json
-      # is a separate top-level config file, not inside the .claude/ dir.
-      - ${HOME}/.claude:/root/.claude:ro
-      - ${HOME}/.claude.json:/root/.claude.json:ro
+      # Read-only, and deliberately just these two files rather than the
+      # whole ~/.claude directory - confirmed live that `claude -p` only
+      # needs .credentials.json (the OAuth session) and settings.json to
+      # run non-interactively; the full directory also holds this user's
+      # conversation history/memory/tasks across every other project on
+      # the machine, none of which this container has any reason to read.
+      # Same cost as before when confirmed (~$0.003/call from PROJECT_ROOT,
+      # matching the existing $0.0024 baseline noted in llm_scorer.py).
+      # Paths are under /home/appuser, not /root - the Dockerfile now runs
+      # this service as a non-root user (also flagged by an independent
+      # Codex review).
+      - ${HOME}/.claude/.credentials.json:/home/appuser/.claude/.credentials.json:ro
+      - ${HOME}/.claude/settings.json:/home/appuser/.claude/settings.json:ro
+      - ${HOME}/.claude.json:/home/appuser/.claude.json:ro
     networks:
       - default
       - career-copilot-external  # to reach the embedding service

@@ -30,6 +30,19 @@ COPY career-copilot/scripts ./scripts
 COPY career-copilot/alembic ./alembic
 COPY career-copilot/alembic.ini .
 
+# Runs as a non-root user rather than the image's default root - flagged
+# by an independent Codex review. Confirmed live that neither uvicorn
+# (binds :8000, a non-privileged port) nor `claude -p` (only needs to
+# read the two files docker-compose.yml mounts read-only into its home
+# dir, plus write scratch/cache state elsewhere under that same home
+# dir) need root. /app and the npm/pip-installed binaries are
+# world-readable by default (COPY/pip/npm), so appuser just needs its
+# own writable home directory - created here, not left to bind-mount
+# ownership at runtime.
+RUN useradd --create-home --home-dir /home/appuser appuser
+USER appuser
+ENV HOME=/home/appuser
+
 EXPOSE 8000
 
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
