@@ -243,3 +243,7 @@ before this repo went public. Every service is also bound to `127.0.0.1`
 only, on purpose — see `docs/DEPLOYMENT.md`'s Privacy and security section
 for the full reasoning and what that means if you deploy this somewhere
 that isn't your own machine.
+
+## License
+
+[MIT](LICENSE)
