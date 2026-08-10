@@ -24,6 +24,11 @@ piece it together from five READMEs.
   text-embeddings-inference), merged into this repo's own
   `docker-compose.yml` rather than a separate project
 
+**Deploying this yourself?** Humans: jump to Setup below, or
+`docs/DEPLOYMENT.md` for the full walkthrough. Using an AI coding agent to
+do the setup for you: point it at `AGENTS.md` instead - it's written as
+directives for an agent rather than prose for a person.
+
 ## Status
 
 Early scaffold. Ingestion layer first: pulling vacancies from multiple
@@ -153,6 +158,17 @@ cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 
 Still needs `docker compose up -d mysql elasticsearch rabbitmq embeddings`
 for its dependencies even when running the API itself locally.
+
+### Your profile
+
+Out of the box the app seeds a placeholder profile (`profile.example.json`)
+so it runs without any real personal data. For recommendations matched
+against your actual background, copy it to `profile.local.json` (gitignored)
+and fill in your own skills/experience, then run `scripts/seed_profile.py`.
+If you're already using an AI coding agent in this repo, you can instead
+just hand it your resume and ask it to set your profile up - see
+`AGENTS.md`'s profile-setup section for the exact instructions it needs.
+Full walkthrough (including troubleshooting): `docs/DEPLOYMENT.md`.
 
 ## Monitoring
 
