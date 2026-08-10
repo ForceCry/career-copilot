@@ -8,6 +8,8 @@ I didn't write most of the code. I made the calls. This is the first post in a s
 
 career-copilot pulls job postings from three sources (Adzuna, Arbeitnow, justjoin.it), embeds them semantically, ranks them against my profile via kNN vector search in Elasticsearch, optionally reranks the top candidates with an LLM for things a similarity score can't tell you — seniority mismatch, overqualification risk, a skills gap in the fine print — and generates tailored cover letters and resume edits for postings I actually want to apply to.
 
+*[Architecture diagram: ingestion → async embedding pipeline → semantic matching, see `diagrams/architecture-overview.drawio` / insert exported PNG here]*
+
 None of that is novel. What I want to talk about in this series is *how* it got built, because "I used AI to write code" undersells what actually happened and overclaims in the wrong direction at the same time.
 
 **The part that's easy to miss**
