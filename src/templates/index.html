@@ -154,8 +154,16 @@
         </div>
         {% endif %}
       </div>
-      <div class="score {% if rec.score >= 70 %}score-high{% elif rec.score >= 40 %}score-mid{% else %}score-low{% endif %}">
-        {{ rec.score }}
+      <div style="text-align: right">
+        <div class="score {% if rec.score >= 70 %}score-high{% elif rec.score >= 40 %}score-mid{% else %}score-low{% endif %}">
+          {{ rec.score }}
+        </div>
+        {% if rec.salary_monthly_min %}
+        <div class="rec-meta" style="white-space: nowrap">
+          ~{{ "{:,.0f}".format(rec.salary_monthly_min) }}&ndash;{{ "{:,.0f}".format(rec.salary_monthly_max) }}
+          {{ rec.salary_currency }}/mo
+        </div>
+        {% endif %}
       </div>
     </div>
     {% if rec.reasoning is defined %}

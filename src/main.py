@@ -17,6 +17,7 @@ from .ingestion.models import Vacancy  # noqa: E402
 from .matching.llm_scorer import llm_rerank  # noqa: E402
 from .matching.vector_scorer import VectorMatchResult, vector_search  # noqa: E402
 from .observability import configure_logging  # noqa: E402
+from .salary import monthly_salary  # noqa: E402
 from .search.es_client import get_client as get_es_client  # noqa: E402
 from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import Profile, ResumeVersion  # noqa: E402
@@ -168,6 +169,10 @@ def index(
         )
         for m in matches:
             vacancy = vacancies_by_id.get(m.vacancy_id)
+            monthly = (
+                monthly_salary(vacancy.salary_min, vacancy.salary_max, vacancy.salary_period)
+                if vacancy else None
+            )
             item = {
                 "title": m.vacancy_title,
                 "company": m.vacancy_company,
@@ -179,6 +184,8 @@ def index(
                 "salary_currency": vacancy.salary_currency if vacancy else "",
                 "salary_period": vacancy.salary_period if vacancy else "",
                 "salary_is_predicted": vacancy.salary_is_predicted if vacancy else False,
+                "salary_monthly_min": monthly[0] if monthly else None,
+                "salary_monthly_max": monthly[1] if monthly else None,
             }
             if hasattr(m, "reasoning"):
                 item["reasoning"] = m.reasoning
