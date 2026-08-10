@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,9 +22,22 @@ from .salary import monthly_salary  # noqa: E402
 from .search.es_client import get_client as get_es_client  # noqa: E402
 from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import Profile, ResumeVersion  # noqa: E402
-from .storage.vacancy_repo import get_vacancies_by_ids, query_vacancies  # noqa: E402
+from .storage.vacancy_repo import get_fresh_vacancy_ids, get_vacancies_by_ids, query_vacancies  # noqa: E402
 
 configure_logging()
+
+# A vacancy that stops appearing in its source's ingestion results (the
+# posting closed, or dropped out of the crawled/searched set) keeps its
+# last confirmed last_seen_at forever, since upsert_vacancies only
+# refreshes rows the current batch actually saw - nothing ever notices
+# and removes it. Confirmed live: a justjoin.it posting that started
+# 404ing was still ranking as the #1 recommendation days after it left
+# the site's own active-jobs sitemap, because vector search has no
+# notion of recency at all. 5 days is generous against each source's
+# real cadence (Adzuna every ~30min, Arbeitnow hourly, justjoin.it daily
+# - see scripts/ingest.py's docstring) while still excluding something
+# that's gone quiet for multiple missed cycles.
+RECOMMENDATION_STALE_AFTER = timedelta(days=5)
 
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -96,7 +110,9 @@ def _compute_recommendations(
     source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
     hits = vector_search(profile, k=top_k, sources=source_list)
 
-    vacancies_by_id = get_vacancies_by_ids(session, [h["vacancy_id"] for h in hits])
+    hit_ids = [h["vacancy_id"] for h in hits]
+    vacancies_by_id = get_vacancies_by_ids(session, hit_ids)
+    fresh_ids = get_fresh_vacancy_ids(session, hit_ids, RECOMMENDATION_STALE_AFTER)
 
     vector_matches = [
         VectorMatchResult(
@@ -108,6 +124,7 @@ def _compute_recommendations(
         )
         for h in hits
         if h["vacancy_id"] in vacancies_by_id  # guards against a stale ES doc whose MySQL row is gone
+        and h["vacancy_id"] in fresh_ids  # excludes postings the source has stopped returning
     ]
     vector_matches = [m for m in vector_matches if m.score >= min_score]
 

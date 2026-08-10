@@ -1,4 +1,5 @@
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -8,7 +9,12 @@ import pytest  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
 from src.ingestion.models import Vacancy  # noqa: E402
-from src.storage.vacancy_repo import mark_embedding_queued, upsert_vacancies  # noqa: E402
+from src.storage.models import VacancyRecord  # noqa: E402
+from src.storage.vacancy_repo import (  # noqa: E402
+    get_fresh_vacancy_ids,
+    mark_embedding_queued,
+    upsert_vacancies,
+)
 
 
 @pytest.fixture
@@ -110,3 +116,34 @@ def test_confirmed_then_edited_vacancy_is_requeued_once(session):
     )
 
     assert to_embed_ids == first_ids
+
+
+def test_recently_seen_vacancy_is_fresh(session):
+    _, _, ids = upsert_vacancies(session, [_vacancy()])
+
+    fresh = get_fresh_vacancy_ids(session, ids, max_age=timedelta(days=5))
+
+    assert fresh == set(ids)
+
+
+def test_vacancy_not_reingested_recently_is_not_fresh(session):
+    """Regression: a real justjoin.it posting was confirmed 404ing and
+    absent from the site's own active-jobs sitemap, yet was still
+    ranking as the #1 recommendation days later - vector search has no
+    notion of recency at all, and upsert_vacancies only refreshes
+    last_seen_at for rows the current ingest batch actually saw, so a
+    posting that quietly stopped being returned by its source just
+    stops advancing, forever, unless something checks for that."""
+    _, _, ids = upsert_vacancies(session, [_vacancy()])
+    record = session.get(VacancyRecord, ids[0])
+    record.last_seen_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=10)
+    session.add(record)
+    session.commit()
+
+    fresh = get_fresh_vacancy_ids(session, ids, max_age=timedelta(days=5))
+
+    assert fresh == set()
+
+
+def test_get_fresh_vacancy_ids_empty_input(session):
+    assert get_fresh_vacancy_ids(session, [], max_age=timedelta(days=5)) == set()

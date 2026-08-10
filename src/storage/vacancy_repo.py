@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, select
 
@@ -131,6 +131,26 @@ def get_vacancies_by_ids(session: Session, ids: list[int]) -> dict[int, Ingestio
         return {}
     records = session.exec(select(VacancyRecord).where(VacancyRecord.id.in_(ids))).all()
     return {record.id: _to_ingestion_vacancy(record) for record in records}
+
+
+def get_fresh_vacancy_ids(session: Session, ids: list[int], max_age: timedelta) -> set[int]:
+    """Vector search has no notion of whether a vacancy is still open -
+    ES only stores what's needed to rank/label a hit, not last_seen_at.
+    Confirmed live: a posting can 404 and drop out of a source's active
+    listings entirely while still ranking as a top recommendation,
+    because nothing ever re-checks it once it's indexed. upsert_vacancies
+    only refreshes last_seen_at for rows the CURRENT ingest batch actually
+    saw, so a vacancy that quietly stopped being returned by its source
+    just stops advancing - this is what callers filter recommendations
+    on to catch that, without needing a separate cleanup job or deleting
+    anything."""
+    if not ids:
+        return set()
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - max_age
+    rows = session.exec(
+        select(VacancyRecord.id).where(VacancyRecord.id.in_(ids), VacancyRecord.last_seen_at >= cutoff)
+    ).all()
+    return set(rows)
 
 
 def query_vacancies(
