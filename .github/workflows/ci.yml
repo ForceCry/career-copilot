@@ -93,5 +93,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # .env is gitignored (real local secrets), so a fresh checkout -
+      # this runner included - never has one, same as a fresh clone. The
+      # api/embedding-worker services' env_file: .env makes `docker
+      # compose config` hard-fail if the file doesn't exist at all, not
+      # just have missing vars - confirmed live (first real CI run on
+      # the public repo failed on exactly this). .env.example is exactly
+      # what Setup/AGENTS.md/DEPLOYMENT.md already tell a real user to
+      # copy first, so this mirrors actual onboarding rather than
+      # papering over the check.
+      - name: Prepare .env
+        run: cp .env.example .env
+
       - name: Validate docker-compose config
         run: docker compose config -q
