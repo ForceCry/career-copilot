@@ -1,14 +1,12 @@
 services:
   api:
-    build:
-      context: ..  # needs to reach sibling adzuna-client/arbeitnow-client/justjoinit-scraper repos
-      dockerfile: career-copilot/Dockerfile
+    build: .
     ports:
       # Bound to loopback, not every interface - candidate PII, and
       # unauthenticated endpoints that trigger paid Claude calls, aren't
       # meant to be reachable from the LAN. Flagged by an independent
-      # Codex review (same class of finding as career-copilot-infra's
-      # embedding service, fixed the same way there already).
+      # Codex review (same class of finding as the embeddings service
+      # below, fixed the same way there already).
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
@@ -18,6 +16,8 @@ services:
       elasticsearch:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      embeddings:
         condition: service_healthy
     volumes:
       # Read-only, and deliberately just these two files rather than the
@@ -34,15 +34,10 @@ services:
       - ${HOME}/.claude/.credentials.json:/home/appuser/.claude/.credentials.json:ro
       - ${HOME}/.claude/settings.json:/home/appuser/.claude/settings.json:ro
       - ${HOME}/.claude.json:/home/appuser/.claude.json:ro
-    networks:
-      - default
-      - career-copilot-external  # to reach the embedding service
     restart: unless-stopped
 
   embedding-worker:
-    build:
-      context: ..  # needs to reach sibling adzuna-client/arbeitnow-client/justjoinit-scraper repos
-      dockerfile: career-copilot/Dockerfile
+    build: .
     command: ["python", "scripts/embedding_worker.py"]
     ports:
       - "127.0.0.1:9100:9100"  # Prometheus metrics, exposed for local inspection too
@@ -55,9 +50,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    networks:
-      - default
-      - career-copilot-external  # to reach the embedding service
+      embeddings:
+        condition: service_healthy
     restart: unless-stopped
 
   mysql:
@@ -129,6 +123,56 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Hugging Face text-embeddings-inference, serving the multilingual-e5-base
+  # model used for vector search. Used to live in a separate repo
+  # (career-copilot-infra) published on a shared cross-project Docker
+  # network, on the theory it might be reused by other projects later -
+  # that never happened, and the indirection made the whole system harder
+  # to understand for no real benefit, so it's merged in here now.
+  embeddings:
+    # Pinned by digest, not the mutable `cpu-latest` tag - a later pull
+    # could otherwise silently change the inference server, breaking
+    # reproducibility. Resolved from `cpu-latest` on 2026-08-04; bump
+    # deliberately, don't let it drift.
+    image: ghcr.io/huggingface/text-embeddings-inference@sha256:cb570aabbfa016b86684f576b5bd72d1ee96cc0b7a00b0ad221b298762b32157
+    environment:
+      MODEL_ID: intfloat/multilingual-e5-base
+      # Pinned to the model's current commit SHA (via the HF API) for the
+      # same reason as the image digest - the "main" revision can move.
+      REVISION: d128750597153bb5987e10b1c3493a34e5a4502a
+    ports:
+      # Bound to loopback only - an unauthenticated compute service
+      # published on every interface is real attack surface, not a
+      # hypothetical one. There for local curl/debugging convenience.
+      - "127.0.0.1:8081:80"
+    volumes:
+      # Model weights download here on first startup (~1GB) - gitignored
+      # (see .gitignore's `data/` pattern), not committed. No manual
+      # download step needed: `docker compose up` fetches them
+      # automatically before the service reports healthy.
+      - ./infra/data/hf-cache:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    # No limits meant this could exhaust host CPU/RAM and disrupt every
+    # other local service - confirmed via `docker stats` that a normal
+    # idle instance already sits around 2.8GiB RSS, with TEI configured
+    # for up to 512 concurrent requests. Flagged by an independent Codex
+    # review. Headroom above observed usage, not a tight ceiling.
+    mem_limit: 4g
+    cpus: 4.0
+    pids_limit: 200
+    # Blocks privilege escalation via setuid/setgid binaries inside the
+    # container - cheap, standard hardening, doesn't require knowing
+    # anything about what the image itself needs to run correctly (unlike
+    # forcing a non-root user, which risks breaking the image's own
+    # /data write permissions without verifying it supports that first).
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v3.13.2
     ports:
@@ -136,9 +180,6 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    networks:
-      - default
-      - career-copilot-external  # to reach TEI's metrics endpoint
     restart: unless-stopped
 
   grafana:
@@ -155,11 +196,6 @@ services:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     restart: unless-stopped
-
-networks:
-  default:
-  career-copilot-external:
-    external: true
 
 volumes:
   mysql-data:

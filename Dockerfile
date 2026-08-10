@@ -13,22 +13,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code@2.1.221
 
-# Build context is the parent Work/ directory (see docker-compose.yml),
-# not career-copilot/ itself - needed to reach these sibling library
-# repos, each extracted as its own standalone, independently installable
-# package (not published anywhere yet, so installed from source here).
-COPY adzuna-client /libs/adzuna-client
-COPY arbeitnow-client /libs/arbeitnow-client
-COPY justjoinit-scraper /libs/justjoinit-scraper
+# Build context is this repo's own root now (monorepo - libs/ holds the
+# three job-board ingestion packages as standalone, independently
+# installable/testable packages in their own right, not published
+# anywhere yet, so installed from source here).
+COPY libs/adzuna-client /libs/adzuna-client
+COPY libs/arbeitnow-client /libs/arbeitnow-client
+COPY libs/justjoinit-scraper /libs/justjoinit-scraper
 RUN pip install --no-cache-dir /libs/adzuna-client /libs/arbeitnow-client /libs/justjoinit-scraper
 
-COPY career-copilot/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY career-copilot/src ./src
-COPY career-copilot/scripts ./scripts
-COPY career-copilot/alembic ./alembic
-COPY career-copilot/alembic.ini .
+COPY src ./src
+COPY scripts ./scripts
+COPY alembic ./alembic
+COPY alembic.ini .
 
 # Runs as a non-root user rather than the image's default root - flagged
 # by an independent Codex review. Confirmed live that neither uvicorn

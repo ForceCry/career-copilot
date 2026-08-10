@@ -6,6 +6,24 @@ cover letters. Built openly as a case study in using AI agents to design and
 implement a real service: see `/docs` (coming soon) for the accompanying
 article series on methodology.
 
+This is a monorepo: the main service, the three job-board ingestion
+libraries it consumes, and the local embedding service all live here, in
+one place, one `docker compose up`. They used to be five separate repos
+(consumed via sibling directories / a shared cross-project Docker network)
+- consolidated for the same reason the article series exists: a reader
+should be able to clone one thing and understand the whole system, not
+piece it together from five READMEs.
+
+- `src/`, `scripts/`, `alembic/`, `tests/` - the main service
+- `libs/adzuna-client`, `libs/arbeitnow-client`, `libs/justjoinit-scraper` -
+  the three ingestion sources, each still an independently
+  installable/testable package in its own right (own `pyproject.toml`, own
+  test suite, own CI job) - not flattened into `src/`, since the whole
+  point is that they're usable standalone too
+- `infra/` - the local embedding service (Hugging Face
+  text-embeddings-inference), merged into this repo's own
+  `docker-compose.yml` rather than a separate project
+
 ## Status
 
 Early scaffold. Ingestion layer first: pulling vacancies from multiple
@@ -29,21 +47,21 @@ sources behind one interface before anything else gets built on top.
   embeds for search engines. Slow (one full page fetch per match) - meant
   to run occasionally, not on every request.
 
-Each source's actual fetch/parse logic now lives in its own standalone
-repo, not here - `AdzunaSource`/`ArbeitnowSource`/`JustJoinItSource` in
-`src/ingestion/sources/` are thin adapters mapping each library's own
+Each source's actual fetch/parse logic lives in its own package under
+`libs/`, not in `src/` - `AdzunaSource`/`ArbeitnowSource`/`JustJoinItSource`
+in `src/ingestion/sources/` are thin adapters mapping each library's own
 `Job` model onto this project's `Vacancy` DTO:
 
-- [`adzuna-client`](../adzuna-client)
-- [`arbeitnow-client`](../arbeitnow-client)
-- [`justjoinit-scraper`](../justjoinit-scraper)
+- [`libs/adzuna-client`](libs/adzuna-client)
+- [`libs/arbeitnow-client`](libs/arbeitnow-client)
+- [`libs/justjoinit-scraper`](libs/justjoinit-scraper)
 
-Each is independently installable and usable without this project - see
-their own READMEs for what was learned building them against the live
-APIs (rate limits, salary formats, what's actually filterable
-server-side). Expected to live as siblings of this repo (`Work/adzuna-client`,
-etc.) - both local dev and the Docker build (context is the parent
-directory, see Dockerfile) assume that layout.
+Each is independently installable and testable on its own (own
+`pyproject.toml`, own test suite) - see their own READMEs for what was
+learned building them against the live APIs (rate limits, salary formats,
+what's actually filterable server-side). Living in this repo doesn't
+change that; it just means one clone gets you the whole system instead of
+four.
 
 Nothing above is fetched live on a request anymore. `scripts/ingest.py
 --source <name>` pulls from one source and upserts into the DB - each
@@ -76,8 +94,9 @@ Two-stage pipeline. First stage is semantic, not keyword-based: the
 profile is embedded (`query: ...` prefix) and matched via Elasticsearch
 kNN against vacancy embeddings, computed by a separate **embedding-worker**
 service that consumes `vacancy.embed`, fetches the vacancy text from
-MySQL, embeds it (`passage: {title}\n\n{description}`) via the TEI service
-in `career-copilot-infra`, and indexes the vector. This replaced an
+MySQL, embeds it (`passage: {title}\n\n{description}`) via the `embeddings`
+service (`infra/`, this repo's own compose - see Setup below for the
+model download), and indexes the vector. This replaced an
 earlier keyword-overlap heuristic entirely - free to run, but blind to
 synonyms and much cheaper to scale to a large vacancy pool than scoring
 every vacancy with an LLM call.
@@ -89,24 +108,23 @@ score alone can't explain.
 
 The LLM call goes through the local `claude` CLI (`claude -p ...`), not the
 Anthropic API — it reuses your already-authenticated Claude Code session, no
-API key to manage. That means the container needs your `~/.claude` session
-mounted in (see docker-compose.yml): it's mounted read-only, but it does give
-the container the ability to *use* your real Claude Code session while
-running. If that's not something you want to grant a container, run
-`llm_rerank_top_n` locally via `.venv` instead — the Docker path works
-without it, just without the LLM rerank layer.
+API key to manage. That means the container needs two files from your
+`~/.claude` session mounted in read-only (`.credentials.json` and
+`settings.json` - just those two, not the whole directory: confirmed live
+that's all the CLI needs non-interactively, and the rest of `~/.claude`
+holds conversation history from every other project on the machine, which
+the container has no reason to read). If that's not something you want to
+grant a container, run `llm_rerank_top_n` locally via `.venv` instead — the
+Docker path works without it, just without the LLM rerank layer.
 
 ## Setup
 
 ### Docker (recommended)
 
-Requires [`career-copilot-infra`](../career-copilot-infra) running first
-(shared embedding service + the `career-copilot-external` network both
-projects attach to):
+One `docker compose up` brings up everything - MySQL, Elasticsearch,
+RabbitMQ, the embedding service, the API, and the embedding-worker:
 
 ```bash
-cd ../career-copilot-infra && docker compose up -d
-cd ../career-copilot
 cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 docker compose up --build -d
 docker compose exec api python scripts/ingest.py --source adzuna
@@ -115,22 +133,33 @@ curl "http://localhost:8000/vacancies?keywords=php,symfony"
 curl "http://localhost:8000/recommendations?top_k=10&llm_rerank_top_n=5"
 ```
 
+**First run downloads the embedding model** (`intfloat/multilingual-e5-base`,
+~1GB) into `infra/data/hf-cache/` - not committed (gitignored), and not a
+separate manual step: the `embeddings` service does this itself on first
+startup, and `api`/`embedding-worker` both wait on its healthcheck (which
+only passes once the model is loaded) before starting, via `depends_on`.
+Expect the first `docker compose up` to take a few minutes longer than
+every one after it; nothing to do but wait.
+
 ### Local (no Docker)
 
 ```bash
 uv venv
 uv pip install -r requirements.txt
-uv pip install -e ../adzuna-client -e ../arbeitnow-client -e ../justjoinit-scraper
+uv pip install -e libs/adzuna-client -e libs/arbeitnow-client -e libs/justjoinit-scraper
 cp .env.example .env  # fill in ADZUNA_APP_ID / ADZUNA_APP_KEY
 .venv/bin/uvicorn src.main:app --reload
 ```
 
+Still needs `docker compose up -d mysql elasticsearch rabbitmq embeddings`
+for its dependencies even when running the API itself locally.
+
 ## Monitoring
 
-Prometheus + Grafana, both in this project's own compose (not the shared
-infra repo - what's being monitored is career-copilot-specific). Grafana
-at http://localhost:3000 comes pre-provisioned with a Prometheus
-datasource and a `career-copilot` dashboard - no manual setup.
+Prometheus + Grafana, provisioned in the same `docker-compose.yml` as
+everything else. Grafana at http://localhost:3000 comes pre-provisioned
+with a Prometheus datasource and a `career-copilot` dashboard (10 panels,
+including LLM call rate/duration) - no manual setup.
 
 Four scrape targets:
 - **RabbitMQ** - built-in Prometheus plugin, enabled via `command:` in
@@ -139,11 +168,13 @@ Four scrape targets:
   default path only exposes cluster-wide aggregates with no `queue`
   label, confirmed live; per-queue depth (what the dashboard needs)
   only exists on the per-object path.
-- **TEI** (the embedding service, in career-copilot-infra) - exposes
+- **TEI** (the `embeddings` service, `infra/`) - exposes
   metrics on its main port (80) at `/metrics`, not the separate port
   9000 `--help` suggests - confirmed live (nothing listens on 9000).
-- **api** - instrumented with `prometheus-fastapi-instrumentator`,
-  request rate/latency/status at `GET /metrics`.
+- **api** - instrumented with `prometheus-fastapi-instrumentator`
+  (request rate/latency/status) plus custom `llm_calls_total`/
+  `llm_call_seconds` metrics for the local `claude` CLI calls, all at
+  `GET /metrics`.
 - **embedding-worker** - custom metrics via `prometheus_client`
   (`embedding_worker_vacancies_processed_total`,
   `embedding_worker_processing_seconds`), served on its own port 9100.

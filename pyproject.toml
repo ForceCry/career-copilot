@@ -3,8 +3,14 @@ line-length = 110
 target-version = "py312"
 # Alembic-generated - Alembic's own template conventions (Union[...] over
 # X | Y, etc.), not hand-written code worth reformatting on every
-# `alembic revision --autogenerate`.
-extend-exclude = ["alembic/versions"]
+# `alembic revision --autogenerate`. libs/ excluded too - confirmed live
+# that `ruff check .` from this root silently applies THIS config to
+# files under libs/ rather than each package's own pyproject.toml
+# [tool.ruff] section (e.g. their target-version = "py310", matching
+# their own requires-python floor) - they're meant to be independently
+# versioned/linted packages, not governed by the main app's config.
+# CI lints each one separately with its own working-directory.
+extend-exclude = ["alembic/versions", "libs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

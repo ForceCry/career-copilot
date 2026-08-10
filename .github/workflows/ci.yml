@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-test:
+  career-copilot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,3 +24,74 @@ jobs:
 
       - name: Test
         run: pytest tests/ -v
+
+  adzuna-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: libs/adzuna-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v
+
+  arbeitnow-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: libs/arbeitnow-client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v
+
+  justjoinit-scraper:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: libs/justjoinit-scraper
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v
+
+  infra-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose config
+        run: docker compose config -q
