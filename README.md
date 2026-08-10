@@ -3,8 +3,8 @@
 A local FastAPI service that ingests job vacancies, scores them against my
 own profile, and helps me decide where to apply — plus generates tailored
 cover letters. Built openly as a case study in using AI agents to design and
-implement a real service: see `/docs` (coming soon) for the accompanying
-article series on methodology.
+implement a real service: see [`docs/articles/`](docs/articles/) for the
+accompanying LinkedIn article series on methodology (plan + drafts).
 
 This is a monorepo: the main service, the three job-board ingestion
 libraries it consumes, and the local embedding service all live here, in
