@@ -1,10 +1,55 @@
 # career-copilot
 
-A local FastAPI service that ingests job vacancies, scores them against my
-own profile, and helps me decide where to apply — plus generates tailored
-cover letters. Built openly as a case study in using AI agents to design and
-implement a real service: see [`docs/articles/`](docs/articles/) for the
-accompanying LinkedIn article series on methodology (plan + drafts).
+**A local job-matching service that ranks postings against your actual
+profile with vector search, optionally reasons about fit with an LLM, and
+drafts the cover letter — a real, working system, not a demo.**
+
+I built this to solve my own problem: too many PHP/Symfony postings to
+read by hand, no good way to tell which ones are actually worth an
+application. It ingests from three job boards, ranks everything
+semantically against my resume, and only spends an LLM call on the
+shortlist that's already promising — the expensive reasoning stays cheap
+because it isn't doing the sorting.
+
+It's also the real code behind a LinkedIn article series on AI-assisted
+engineering — see [`docs/articles/`](docs/articles/). Every design
+decision, bug, and architectural U-turn documented there happened for
+real while building something I actually use to apply to jobs, and got
+written up honestly rather than cleaned up for a demo.
+
+**Deploying this yourself?** Humans: jump to [Setup](#setup) below, or
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full walkthrough. Using
+an AI coding agent to do the setup for you: point it at
+[`AGENTS.md`](AGENTS.md) instead — it's written as directives for an
+agent rather than prose for a person.
+
+## Features
+
+- **Multi-source ingestion** — Adzuna, Arbeitnow, justjoin.it, each as an
+  independently reusable client library (`libs/`), not tied to this app
+- **Semantic ranking** — Elasticsearch kNN vector search against your
+  profile, not keyword matching
+- **Optional LLM reranking** — the top shortlist gets scored for fit an
+  embedding can't judge (seniority, overqualification, gaps a similarity
+  score misses), via your own local Claude Code session — no API key
+  to manage
+- **Tailored artifacts** — generated cover letters and resume-tailoring
+  suggestions per posting, grounded only in what's actually in your profile
+- **Freshness-aware recommendations** — a posting a source stops
+  returning (closed, expired, pulled) drops out of recommendations
+  automatically, not just on the next full re-ingest
+- **Production-shaped, not a toy** — Alembic migrations, structured
+  JSON logging, Prometheus/Grafana monitoring (10-panel dashboard,
+  provisioned out of the box), non-root containers, CI across every
+  package, 80 automated tests
+
+## Tech stack
+
+FastAPI · MySQL · Elasticsearch · RabbitMQ · Hugging Face
+text-embeddings-inference · Alembic · Prometheus + Grafana · Docker
+Compose · local Claude Code CLI for LLM reasoning (no API key)
+
+## Repo layout
 
 This is a monorepo: the main service, the three job-board ingestion
 libraries it consumes, and the local embedding service all live here, in
@@ -23,16 +68,6 @@ piece it together from five READMEs.
 - `infra/` - the local embedding service (Hugging Face
   text-embeddings-inference), merged into this repo's own
   `docker-compose.yml` rather than a separate project
-
-**Deploying this yourself?** Humans: jump to Setup below, or
-`docs/DEPLOYMENT.md` for the full walkthrough. Using an AI coding agent to
-do the setup for you: point it at `AGENTS.md` instead - it's written as
-directives for an agent rather than prose for a person.
-
-## Status
-
-Early scaffold. Ingestion layer first: pulling vacancies from multiple
-sources behind one interface before anything else gets built on top.
 
 ## Ingestion sources
 
@@ -201,5 +236,10 @@ Four scrape targets:
 
 ## Privacy
 
-Personal data (profile, resume drafts, local DB) never goes into the repo —
-see `.gitignore`. Only anonymized seed/example data ships here.
+Personal data (profile, resume drafts, local DB, backups) never goes into
+the repo — see `.gitignore`. Only anonymized seed/example data ships here;
+verified against the full commit history, not just the current tree,
+before this repo went public. Every service is also bound to `127.0.0.1`
+only, on purpose — see `docs/DEPLOYMENT.md`'s Privacy and security section
+for the full reasoning and what that means if you deploy this somewhere
+that isn't your own machine.
