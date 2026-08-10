@@ -159,6 +159,11 @@ Docker path works without it, just without the LLM rerank layer.
 
 ## Setup
 
+```bash
+git clone https://github.com/ForceCry/career-copilot.git
+cd career-copilot
+```
+
 ### Docker (recommended)
 
 One `docker compose up` brings up everything - MySQL, Elasticsearch,

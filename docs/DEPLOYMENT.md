@@ -23,7 +23,7 @@ as directives for an agent, this one is written for you.
 ## First run
 
 ```bash
-git clone <this repo> career-copilot
+git clone https://github.com/ForceCry/career-copilot.git
 cd career-copilot
 cp .env.example .env
 ```

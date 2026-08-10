@@ -15,6 +15,8 @@ multi-tenant; there is exactly one profile.
 
 ## Bringing the stack up
 
+0. If you don't already have this repo checked out: `git clone
+   https://github.com/ForceCry/career-copilot.git && cd career-copilot`.
 1. Confirm Docker and Docker Compose are available (`docker compose
    version`). If not, stop and tell the user - don't attempt to install
    Docker yourself.
