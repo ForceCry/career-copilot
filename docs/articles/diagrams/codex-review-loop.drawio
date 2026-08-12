@@ -1,0 +1,86 @@
+<mxfile host="app.diagrams.net" modified="2026-08-11T10:00:00.000Z" agent="career-copilot" version="24.0.0" type="device">
+  <diagram name="Codex Review Loop" id="codex-review-loop">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="720" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===== Main loop nodes ===== -->
+        <mxCell id="n1" value="Claude builds&#10;(or applies a fix)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="320" y="40" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n2" value="Codex reviews independently&#10;(skeptical senior architect)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="320" y="170" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n3" value="Human verifies each finding&#10;against something real&#10;(live API call, real logs, a real crash)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="290" y="300" width="300" height="75" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n4" value="Confirmed?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="350" y="420" width="180" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n5a" value="Fixed&#10;(code updated + tested)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="120" y="560" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n5b" value="Rejected&#10;(documented, no code change)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="560" y="560" width="220" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n6" value="Shipped / committed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="640" y="170" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Loop annotation ===== -->
+        <mxCell id="note1" value="This loop runs at least 2 rounds in practice&#10;before anything ships - a review round routinely&#10;surfaces new findings on the previous round's fixes." style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="440" width="260" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Main flow edges ===== -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n1" target="n2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n2" target="n3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n3" target="n4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4a" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" edge="1" parent="1" source="n4" target="n5a">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4b" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;" edge="1" parent="1" source="n4" target="n5b">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Loop-back edges: both outcomes feed the next round ===== -->
+        <mxCell id="e5a" value="next round" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.15;entryY=1;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="1" source="n5a" target="n1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="60" y="590" />
+              <mxPoint x="60" y="70" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5b" value="next round" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.85;entryY=1;entryDx=0;entryDy=0;dashed=1;" edge="1" parent="1" source="n5b" target="n1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="590" />
+              <mxPoint x="860" y="20" />
+              <mxPoint x="500" y="20" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===== Exit condition: a review round with nothing new ===== -->
+        <mxCell id="e6" value="round N: no new findings" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;dashed=1;" edge="1" parent="1" source="n2" target="n6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

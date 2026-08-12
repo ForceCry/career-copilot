@@ -2,6 +2,8 @@
 
 In the last post I described building career-copilot mostly through conversation with Claude. This one is about the step most people skip: after the code was "done," I handed the whole thing to a second, independent AI — Codex — and told it to review the work as a skeptical senior architect looking for bugs and bad decisions, not a collaborator looking to be agreeable.
 
+*[Diagram: the build → review → verify cycle, drawn as an actual loop — see `diagrams/codex-review-loop.drawio` / insert exported PNG here]*
+
 Here's the part that made it actually useful instead of theater: I show myself the raw findings. Not a summary of what I decided to fix. The literal output, before I've touched any of it. I only started doing this after realizing I couldn't otherwise tell what I was quietly accepting versus quietly ignoring — and once findings are visible before triage, you notice how many of them *don't* survive verification.
 
 **A finding that was wrong**
