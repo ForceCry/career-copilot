@@ -152,6 +152,14 @@ into cron yourself if you want that.
   reachable from your LAN, let alone the internet. If you need remote
   access, put a real reverse proxy with authentication in front of it —
   don't just change the bind address.
+- What actually lands in the database (all local, gitignored, covered by
+  `scripts/backup_db.sh`): the profile you seed from `profile.local.json`
+  (name/email/phone/experience), saved `ResumeVersion` snapshots, freeform
+  notes/follow-up dates on tracked applications (`Application.notes`),
+  and every generated cover letter/tailoring-suggestions artifact
+  (`GeneratedArtifact.content`) — these are persisted, not request-time-
+  only. None of it is written to git; `git status --ignored` is the way
+  to confirm that for yourself in a fork.
 - `.env`, `profile.local.json`, `resume.local.md`, `data/` (including
   the embedding model cache), and `backups/` are all gitignored. If
   you're maintaining a fork or contributing back, double-check `git

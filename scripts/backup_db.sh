@@ -2,10 +2,13 @@
 # Dumps the career_copilot MySQL database to a timestamped, gzip-compressed
 # local file and prunes old backups beyond a retention count.
 #
-# Covers everything that matters here: vacancies, the profile, and
-# ResumeVersion rows (generated cover letters/tailoring suggestions are
-# request-time only, never persisted, so there's nothing extra to back up
-# for those - only explicitly-saved resume versions live in the DB).
+# No explicit table list - mysqldump covers the whole database, so this
+# stays correct as new tables get added. As of the application-tracking/
+# tailored-artifacts work, that now includes real personal data beyond
+# just the profile/vacancies/ResumeVersion: Application.notes (freeform
+# notes on a tracked posting) and GeneratedArtifact.content (full
+# generated cover letters/tailoring suggestions, no longer request-time-
+# only - see docs/DEPLOYMENT.md's Privacy and security notes).
 #
 # Run: ./scripts/backup_db.sh
 # Cron example (adjust path):
