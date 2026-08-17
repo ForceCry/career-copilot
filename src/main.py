@@ -1,9 +1,10 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import text
@@ -20,9 +21,24 @@ from .matching.vector_scorer import VectorMatchResult, vector_search  # noqa: E4
 from .observability import configure_logging  # noqa: E402
 from .salary import monthly_salary  # noqa: E402
 from .search.es_client import get_client as get_es_client  # noqa: E402
+from .storage.application_repo import get_applications_map, list_applications, set_status  # noqa: E402
 from .storage.db import engine, get_session, init_db  # noqa: E402
-from .storage.models import Profile, ResumeVersion  # noqa: E402
+from .storage.models import (  # noqa: E402
+    APPLICATION_STATUSES,
+    Application,
+    Profile,
+    ResumeVersion,
+    VacancyRecord,
+)
 from .storage.vacancy_repo import get_fresh_vacancy_ids, get_vacancies_by_ids, query_vacancies  # noqa: E402
+
+# Statuses that mean "don't show me this again" - excluded from the main
+# recommendations feed by default. Everything else (saved/applied/
+# interviewing/offer) stays visible there too, with a status badge - only
+# an explicit dismiss/reject should make a vacancy disappear from view,
+# not just having been acted on. /applications is the dedicated view for
+# seeing every tracked vacancy together regardless of status.
+RECOMMENDATION_HIDDEN_STATUSES = {"dismissed", "rejected"}
 
 configure_logging()
 
@@ -106,13 +122,18 @@ def _compute_recommendations(
     min_score: int,
     top_k: int,
     llm_rerank_top_n: int,
-) -> tuple[list, dict[int, Vacancy]]:
+) -> tuple[list, dict[int, Vacancy], dict[int, Application]]:
     source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
     hits = vector_search(profile, k=top_k, sources=source_list)
 
     hit_ids = [h["vacancy_id"] for h in hits]
     vacancies_by_id = get_vacancies_by_ids(session, hit_ids)
     fresh_ids = get_fresh_vacancy_ids(session, hit_ids, RECOMMENDATION_STALE_AFTER)
+    applications_by_id = get_applications_map(session, hit_ids)
+
+    def _not_hidden(vacancy_id: int) -> bool:
+        application = applications_by_id.get(vacancy_id)
+        return application is None or application.status not in RECOMMENDATION_HIDDEN_STATUSES
 
     vector_matches = [
         VectorMatchResult(
@@ -125,6 +146,7 @@ def _compute_recommendations(
         for h in hits
         if h["vacancy_id"] in vacancies_by_id  # guards against a stale ES doc whose MySQL row is gone
         and h["vacancy_id"] in fresh_ids  # excludes postings the source has stopped returning
+        and _not_hidden(h["vacancy_id"])  # excludes vacancies explicitly dismissed/rejected
     ]
     vector_matches = [m for m in vector_matches if m.score >= min_score]
 
@@ -136,9 +158,9 @@ def _compute_recommendations(
         # which previously let one silently overwrite the other in the
         # shortlist lookup - flagged by an independent Codex review.
         shortlist = [(m.vacancy_id, vacancies_by_id[m.vacancy_id]) for m in vector_matches[:llm_rerank_top_n]]
-        return llm_rerank(shortlist, profile), vacancies_by_id
+        return llm_rerank(shortlist, profile), vacancies_by_id, applications_by_id
 
-    return vector_matches, vacancies_by_id
+    return vector_matches, vacancies_by_id, applications_by_id
 
 
 @app.get("/recommendations")
@@ -159,7 +181,7 @@ def recommendations(
     if not profile:
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
-    matches, _ = _compute_recommendations(
+    matches, _, _ = _compute_recommendations(
         session, profile, sources, min_score, top_k, llm_rerank_top_n
     )
     return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
@@ -181,16 +203,18 @@ def index(
     if not profile:
         error = "No profile seeded yet — run scripts/seed_profile.py"
     else:
-        matches, vacancies_by_id = _compute_recommendations(
+        matches, vacancies_by_id, applications_by_id = _compute_recommendations(
             session, profile, sources, min_score, top_k, llm_rerank_top_n
         )
         for m in matches:
             vacancy = vacancies_by_id.get(m.vacancy_id)
+            application = applications_by_id.get(m.vacancy_id)
             monthly = (
                 monthly_salary(vacancy.salary_min, vacancy.salary_max, vacancy.salary_period)
                 if vacancy else None
             )
             item = {
+                "vacancy_id": m.vacancy_id,
                 "title": m.vacancy_title,
                 "company": m.vacancy_company,
                 "url": m.vacancy_url,
@@ -203,6 +227,7 @@ def index(
                 "salary_is_predicted": vacancy.salary_is_predicted if vacancy else False,
                 "salary_monthly_min": monthly[0] if monthly else None,
                 "salary_monthly_max": monthly[1] if monthly else None,
+                "application_status": application.status if application else None,
             }
             if hasattr(m, "reasoning"):
                 item["reasoning"] = m.reasoning
@@ -222,6 +247,7 @@ def index(
             "top_k": top_k,
             "llm_rerank_top_n": llm_rerank_top_n,
             "error": error,
+            "application_statuses": APPLICATION_STATUSES,
         },
     )
 
@@ -365,5 +391,128 @@ def tailoring_suggestions(
             "vacancy_company": company,
             "vacancy_url": url,
             "body_text": suggestions,
+        },
+    )
+
+
+def _same_origin(request: Request) -> bool:
+    """Lightweight CSRF mitigation for the state-changing POST below - the
+    API being loopback-only doesn't stop an arbitrary page open in the
+    user's own browser from POSTing here with a plain HTML form, since the
+    browser (not an attacker's server) makes the request. Browsers attach
+    Origin - or, failing that, Referer - to cross-origin form submissions,
+    so reject a request whose Origin/Referer names a different host:port
+    than this one. Neither header being present is allowed through rather
+    than rejected, since some legitimate same-origin requests (curl,
+    tests, privacy-hardened browsers) omit both. Flagged by an independent
+    Codex review."""
+    expected = request.url.netloc
+    for header in ("origin", "referer"):
+        value = request.headers.get(header)
+        if value:
+            return urlparse(value).netloc == expected
+    return True
+
+
+def _safe_redirect(path: str) -> str:
+    """redirect_to below is a client-controlled hidden form field -
+    restricting it to same-origin absolute paths prevents this endpoint
+    being used as an open redirect (e.g. a malicious page POSTing here
+    with redirect_to=https://phishing.example, or a protocol-relative
+    //evil.example), flagged by an independent Codex review. Falls back
+    to / for anything that doesn't look like a local path rather than
+    erroring - a bad redirect_to shouldn't block the status update that
+    already succeeded."""
+    if path.startswith("/") and not path.startswith("//"):
+        return path
+    return "/"
+
+
+@app.post("/vacancies/{vacancy_id}/status")
+def update_vacancy_status(
+    request: Request,
+    vacancy_id: int,
+    status: str = Form(...),
+    notes: str = Form(""),
+    follow_up_at: str = Form(""),
+    # An explicit flag, not "notes/follow_up_at present vs absent" -
+    # confirmed live that FastAPI/Starlette collapse an explicitly
+    # submitted empty form field to None for `str | None = Form(None)`
+    # params, the same as a field that was never submitted at all, so
+    # that distinction doesn't survive Form parsing and can't be used to
+    # tell "clear this" apart from "don't touch this". The quick-select
+    # on the recommendations page (only ever submits `status`) leaves
+    # this False; the /applications full-edit form always sets it True,
+    # even when clearing notes/follow_up_at to empty. Real data-loss bug,
+    # flagged by an independent Codex review: the original code had no
+    # such flag at all and always overwrote both fields unconditionally.
+    update_details: bool = Form(False),
+    redirect_to: str = Form("/"),
+    session: Session = Depends(get_session),
+):
+    """Tracks the user's relationship to a vacancy - saved / applied /
+    interviewing / offer / rejected / dismissed. Plain HTML form POST +
+    redirect, same no-JS style as the rest of this app - called from both
+    / and /applications, with redirect_to telling it which page to send
+    the user back to afterward."""
+    if not _same_origin(request):
+        raise HTTPException(403, "Cross-origin form submission rejected")
+    if status not in APPLICATION_STATUSES:
+        raise HTTPException(400, f"Unknown status {status!r} - must be one of {APPLICATION_STATUSES}")
+    if not session.get(VacancyRecord, vacancy_id):
+        raise HTTPException(404, "Vacancy not found")
+
+    if not update_details:
+        set_status(session, vacancy_id, status)
+        return RedirectResponse(url=_safe_redirect(redirect_to), status_code=303)
+
+    if follow_up_at:
+        try:
+            parsed_follow_up = date.fromisoformat(follow_up_at)
+        except ValueError:
+            # Previously unguarded - flagged by an independent Codex
+            # review: a malformed date crashed this into a raw 500
+            # instead of a client error.
+            raise HTTPException(422, f"follow_up_at must be an ISO date (YYYY-MM-DD), got {follow_up_at!r}")
+    else:
+        parsed_follow_up = None
+
+    set_status(session, vacancy_id, status, notes=notes, follow_up_at=parsed_follow_up)
+    return RedirectResponse(url=_safe_redirect(redirect_to), status_code=303)
+
+
+@app.get("/applications", response_class=HTMLResponse)
+def applications_page(request: Request, session: Session = Depends(get_session)):
+    """The pipeline view - every tracked vacancy (anything with at least
+    one status change ever made), grouped by current status. Untracked
+    vacancies never show up here - see / for the semantic-match feed."""
+    applications = list_applications(session)
+    vacancies_by_id = get_vacancies_by_ids(session, [a.vacancy_id for a in applications])
+
+    by_status: dict[str, list[dict]] = {s: [] for s in APPLICATION_STATUSES}
+    for a in applications:
+        vacancy = vacancies_by_id.get(a.vacancy_id)
+        if not vacancy:
+            # the vacancy row itself is gone; don't let one orphaned application break the whole page
+            continue
+        by_status[a.status].append(
+            {
+                "vacancy_id": a.vacancy_id,
+                "title": vacancy.title,
+                "company": vacancy.company,
+                "url": vacancy.url,
+                "status": a.status,
+                "notes": a.notes,
+                "follow_up_at": a.follow_up_at,
+                "updated_at": a.updated_at,
+            }
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "applications.html",
+        {
+            "by_status": by_status,
+            "application_statuses": APPLICATION_STATUSES,
         },
     )

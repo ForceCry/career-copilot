@@ -8,6 +8,14 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+# Deliberately plain strings, not a DB-level enum - matches the existing
+# convention in this file (salary_period, Skill.category), and keeps
+# adding a status as simple as updating this tuple + the UI, no migration
+# needed. Validated at the repo layer (application_repo.set_status), not
+# by the DB.
+APPLICATION_STATUSES = ("saved", "applied", "interviewing", "offer", "rejected", "dismissed")
+
+
 class Profile(SQLModel, table=True):
     """Single-user tool: in practice there's exactly one row here, but
     modeling it as a real table (not a config singleton) keeps the door
@@ -113,3 +121,52 @@ class VacancyRecord(SQLModel, table=True):
     # even an otherwise-unchanged one - naturally re-queues it instead of
     # requiring someone to remember to run the backfill script.
     embedding_queued_at: datetime | None = None
+
+
+class Application(SQLModel, table=True):
+    """The user's relationship to a vacancy - separate from VacancyRecord
+    itself, since a vacancy can exist (ingested, scored, recommended)
+    without ever being tracked; only vacancies the user has acted on
+    (saved, applied, dismissed, ...) get a row here. One row per vacancy;
+    ApplicationEvent below is the append-only history that makes past
+    transitions (when did this move to interviewing, before it was
+    rejected) recoverable - same "never overwritten in place" pattern as
+    ResumeVersion."""
+
+    __tablename__ = "application"
+
+    id: int | None = Field(default=None, primary_key=True)
+    vacancy_id: int = Field(foreign_key="vacancy.id", unique=True)
+    status: str = Field(index=True)  # one of APPLICATION_STATUSES
+    notes: str = Field(default="", sa_column=Column(Text))
+    follow_up_at: date | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+    # order_by=id, not created_at - the migration's MySQL DATETIME column
+    # has no fractional-second precision, so several transitions inside
+    # the same second (routine when clicking through a pipeline quickly)
+    # share a created_at and would sort arbitrarily without a tie-breaker.
+    # id is monotonic with insertion order regardless. Flagged by an
+    # independent Codex review.
+    events: list["ApplicationEvent"] = Relationship(
+        back_populates="application",
+        sa_relationship_kwargs={"order_by": "ApplicationEvent.id"},
+    )
+
+
+class ApplicationEvent(SQLModel, table=True):
+    """One row per status transition - append-only, never edited or
+    deleted, so the timeline (saved -> applied -> interviewing ->
+    rejected, with dates) stays reconstructable even though Application
+    itself only holds the current status."""
+
+    __tablename__ = "application_event"
+
+    id: int | None = Field(default=None, primary_key=True)
+    application_id: int = Field(foreign_key="application.id", index=True)
+    status: str
+    note: str = Field(default="", sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=_utcnow)
+
+    application: Application = Relationship(back_populates="events")

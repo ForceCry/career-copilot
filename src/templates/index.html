@@ -87,7 +87,7 @@
   .rec-concerns { margin-top: 6px; font-size: 0.82rem; color: var(--muted); }
   .rec a { color: inherit; }
   .empty { color: var(--muted); padding: 20px 0; }
-  .rec-actions { margin-top: 10px; display: flex; gap: 8px; }
+  .rec-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .rec-actions button {
     font-size: 0.78rem;
     padding: 4px 10px;
@@ -97,9 +97,34 @@
     cursor: pointer;
     color: inherit;
   }
+  .status-form { display: inline-flex; gap: 4px; align-items: center; }
+  .status-form select {
+    font-size: 0.78rem;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: inherit;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  nav.top { margin-bottom: 14px; font-size: 0.85rem; }
+  nav.top a { color: inherit; }
 </style>
 </head>
 <body>
+
+<nav class="top"><a href="/">Recommendations</a> &middot; <a href="/applications">Applications</a></nav>
 
 {% if profile %}
 <div class="profile-card">
@@ -144,7 +169,10 @@
   <div class="rec">
     <div class="rec-head">
       <div>
-        <div class="rec-title"><a href="{{ rec.url }}" target="_blank" rel="noopener">{{ rec.title }}</a></div>
+        <div class="rec-title">
+          <a href="{{ rec.url }}" target="_blank" rel="noopener">{{ rec.title }}</a>
+          {% if rec.application_status %}<span class="badge">{{ rec.application_status }}</span>{% endif %}
+        </div>
         <div class="rec-meta">{{ rec.company }}</div>
         {% if rec.salary_min %}
         <div class="rec-meta">
@@ -190,6 +218,16 @@
         <input type="hidden" name="url" value="{{ rec.url }}">
         <input type="hidden" name="description" value="{{ rec.description }}">
         <button type="submit">Tailor resume</button>
+      </form>
+      <form method="post" action="/vacancies/{{ rec.vacancy_id }}/status" class="status-form">
+        <input type="hidden" name="redirect_to" value="/?sources={{ sources | urlencode }}&min_score={{ min_score }}&top_k={{ top_k }}&llm_rerank_top_n={{ llm_rerank_top_n }}">
+        <select name="status" required>
+          <option value="" disabled {% if not rec.application_status %}selected{% endif %}>Set status…</option>
+          {% for s in application_statuses %}
+          <option value="{{ s }}" {% if rec.application_status == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Save</button>
       </form>
     </div>
   </div>
