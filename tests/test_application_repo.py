@@ -14,8 +14,11 @@ from src.storage.application_repo import (  # noqa: E402
     get_application,
     get_applications_map,
     get_excluded_companies,
+    get_remote_feedback,
+    get_seniority_feedback,
     get_skill_feedback,
     list_applications,
+    primary_seniority_level,
     set_status,
     skill_mentioned,
 )
@@ -286,6 +289,183 @@ def test_skill_feedback_negative_when_dismissed_disproportionately_more_than_bas
     # baseline dismiss rate: 3/5 = 0.6; wordpress-specific: 3/3 = 1.0 -
     # a 0.4 gap, over the 0.3 margin.
     assert get_skill_feedback(session, ["WordPress"]) == {"wordpress": -10}
+
+
+def test_remote_feedback_empty_with_no_applications(session):
+    assert get_remote_feedback(session) == {}
+
+
+def test_remote_feedback_never_flags_onsite_even_when_dismissed_above_baseline(session):
+    """Regression: an independent Codex review found remote=False was
+    treated as a confirmed "onsite" signal, but it's also this codebase's
+    "unknown" value - src/ingestion/sources/adzuna.py hard-codes
+    remote=False for every vacancy since Adzuna's API doesn't expose that
+    field at all. Even a clean, textbook "dismissed disproportionately
+    more than baseline" pattern on remote=False rows must never produce
+    an "onsite" key - there's no way to tell a genuinely-onsite dismissal
+    apart from an unknown-status one from this field alone."""
+    _, _, onsite_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", remote=False),
+            _vacancy(external_id="2", remote=False),
+            _vacancy(external_id="3", remote=False),
+        ],
+    )
+    _, _, remote_ids = upsert_vacancies(
+        session,
+        [_vacancy(external_id="4", remote=True), _vacancy(external_id="5", remote=True)],
+    )
+    for vid in onsite_ids:
+        set_status(session, vid, "dismissed")
+    for vid in remote_ids:
+        set_status(session, vid, "applied")
+
+    assert get_remote_feedback(session) == {}
+
+
+def test_remote_feedback_positive_when_remote_engaged_above_baseline(session):
+    _, _, remote_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", remote=True),
+            _vacancy(external_id="2", remote=True),
+            _vacancy(external_id="3", remote=True),
+        ],
+    )
+    _, _, onsite_ids = upsert_vacancies(
+        session,
+        [_vacancy(external_id="4", remote=False), _vacancy(external_id="5", remote=False)],
+    )
+    for vid in remote_ids:
+        set_status(session, vid, "applied")
+    for vid in onsite_ids:
+        set_status(session, vid, "dismissed")
+
+    assert get_remote_feedback(session) == {"remote": 10}
+
+
+def test_remote_feedback_no_signal_when_dismiss_rate_matches_baseline(session):
+    """Both categories individually dismissed at exactly the same rate as
+    the overall baseline (2/3 each) - neither is disproportionately worse,
+    so neither counts as signal, even though each has enough samples to
+    otherwise clear FEEDBACK_MIN_SAMPLES."""
+    _, _, remote_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", remote=True),
+            _vacancy(external_id="2", remote=True),
+            _vacancy(external_id="3", remote=True),
+        ],
+    )
+    _, _, onsite_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", remote=False),
+            _vacancy(external_id="5", remote=False),
+            _vacancy(external_id="6", remote=False),
+        ],
+    )
+    for status, vid in zip(["dismissed", "dismissed", "applied"], remote_ids):
+        set_status(session, vid, status)
+    for status, vid in zip(["dismissed", "dismissed", "applied"], onsite_ids):
+        set_status(session, vid, status)
+
+    assert get_remote_feedback(session) == {}
+
+
+def test_primary_seniority_level_picks_the_earliest_match(session):
+    """Regression: an independent Codex review found a title matching
+    multiple SENIORITY_LEVELS keywords (e.g. "Senior Lead Engineer") used
+    to contribute to BOTH buckets - a posting is one seniority level, not
+    several. primary_seniority_level picks whichever keyword appears
+    first in the title, matching how titles conventionally lead with
+    their primary qualifier."""
+    assert primary_seniority_level("senior lead engineer") == "senior"
+    assert primary_seniority_level("lead / senior engineer") == "lead"
+    assert primary_seniority_level("backend developer") is None
+
+
+def test_seniority_feedback_does_not_double_count_a_title_matching_two_levels(session):
+    _, _, negative_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", title="Senior Lead Engineer"),
+            _vacancy(external_id="2", title="Senior Lead Architect"),
+            _vacancy(external_id="3", title="Senior Lead Developer"),
+        ],
+    )
+    _, _, baseline_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", title="Backend Engineer"),
+            _vacancy(external_id="5", title="Backend Role"),
+        ],
+    )
+    for vid in negative_ids:
+        set_status(session, vid, "dismissed")
+    for vid in baseline_ids:
+        set_status(session, vid, "applied")
+
+    # "senior" comes first in each title, so it's the only bucket that
+    # gets these 3 dismissals - "lead" must stay empty (no signal), not
+    # also pick up -10 from the same 3 postings.
+    assert get_seniority_feedback(session) == {"senior": -10}
+
+
+def test_seniority_feedback_negative_when_a_level_dismissed_above_baseline(session):
+    _, _, junior_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", title="Junior PHP Developer"),
+            _vacancy(external_id="2", title="Junior Backend Engineer"),
+            _vacancy(external_id="3", title="Junior Developer role"),
+        ],
+    )
+    _, _, baseline_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", title="Backend Engineer"),
+            _vacancy(external_id="5", title="Backend Role"),
+        ],
+    )
+    for vid in junior_ids:
+        set_status(session, vid, "dismissed")
+    for vid in baseline_ids:
+        set_status(session, vid, "applied")
+
+    assert get_seniority_feedback(session) == {"junior": -10}
+
+
+def test_seniority_feedback_ignores_incidental_mention_outside_title(session):
+    """Only the title is searched - "senior" appearing in a description
+    (e.g. "reports to a senior manager") on an otherwise-unrelated-level
+    posting shouldn't count as a senior-level data point. Constructed so
+    that searching the full text WOULD produce a (wrong) signal here -
+    "senior" only appears in the 3 dismissed postings' descriptions, never
+    in the 2 baseline ones - so this only stays {} if description text is
+    correctly excluded."""
+    _, _, dismissed_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", title="Backend Developer", description="Reports to a senior manager."),
+            _vacancy(external_id="2", title="Backend Developer", description="Reports to a senior manager."),
+            _vacancy(external_id="3", title="Backend Developer", description="Reports to a senior manager."),
+        ],
+    )
+    _, _, baseline_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", title="Backend Developer", description="Generic role."),
+            _vacancy(external_id="5", title="Backend Developer", description="Generic role."),
+        ],
+    )
+    for vid in dismissed_ids:
+        set_status(session, vid, "dismissed")
+    for vid in baseline_ids:
+        set_status(session, vid, "applied")
+
+    assert get_seniority_feedback(session) == {}
 
 
 def test_skill_feedback_ignores_short_skill_matched_inside_unrelated_word(session):

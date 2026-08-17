@@ -24,9 +24,12 @@ from .search.es_client import get_client as get_es_client  # noqa: E402
 from .storage.application_repo import (  # noqa: E402
     get_applications_map,
     get_excluded_companies,
+    get_remote_feedback,
+    get_seniority_feedback,
     get_skill_feedback,
     list_applications,
     normalize_company_name,
+    primary_seniority_level,
     set_status,
     skill_mentioned,
 )
@@ -48,6 +51,15 @@ from .storage.vacancy_repo import get_fresh_vacancy_ids, get_vacancies_by_ids, q
 # not just having been acted on. /applications is the dedicated view for
 # seeing every tracked vacancy together regardless of status.
 RECOMMENDATION_HIDDEN_STATUSES = NEGATIVE_APPLICATION_STATUSES
+
+# Caps the COMBINED skill+remote+seniority score adjustment before the
+# separate 0-100 display clamp - see _feedback_score_adjustment's comment.
+# Flagged by an independent Codex review: left unbounded, several stacked
+# feedback signals (skill deltas alone can multiply) could swing a score
+# far enough to collapse distinct candidates to the same 0/100 floor/
+# ceiling, changing min_score eligibility and LLM-shortlist selection more
+# than a "soft nudge" should.
+FEEDBACK_MAX_TOTAL_ADJUSTMENT = 20
 
 configure_logging()
 
@@ -145,14 +157,17 @@ def _compute_recommendations(
     # already acted on - deterministic, applied before any LLM rerank so
     # the shortlist it sees is already cleaned up.
     excluded_companies = get_excluded_companies(session)
-    # Explicit feedback signal from application_repo.get_skill_feedback: a
-    # candidate's own profile skill that's mentioned in postings the user
-    # has consistently dismissed/rejected nudges similar future postings
-    # down; one they've consistently engaged with (saved/applied/...)
-    # nudges them up. A soft score adjustment, not a hard filter like the
-    # company exclusion above - the signal is noisier (a skill mentioned
-    # in a description isn't necessarily WHY a posting was dismissed).
+    # Explicit feedback signals from application_repo - a posting's own
+    # skill mentions / remote flag / title seniority that the user has
+    # consistently dismissed/rejected (disproportionately more than their
+    # overall dismiss rate) nudges similar future postings down; one
+    # they've consistently engaged with nudges them up. Soft score
+    # adjustments, not a hard filter like the company exclusion above -
+    # these signals are noisier (a skill mentioned in a description isn't
+    # necessarily WHY a posting was dismissed).
     skill_feedback = get_skill_feedback(session, [s.name for s in profile.skills])
+    remote_feedback = get_remote_feedback(session)
+    seniority_feedback = get_seniority_feedback(session)
 
     def _not_hidden(vacancy_id: int) -> bool:
         application = applications_by_id.get(vacancy_id)
@@ -162,12 +177,34 @@ def _compute_recommendations(
         vacancy = vacancies_by_id.get(vacancy_id)
         return vacancy is None or normalize_company_name(vacancy.company) not in excluded_companies
 
-    def _skill_score_adjustment(vacancy_id: int) -> int:
+    def _feedback_score_adjustment(vacancy_id: int) -> int:
         vacancy = vacancies_by_id.get(vacancy_id)
-        if vacancy is None or not skill_feedback:
+        if vacancy is None:
             return 0
-        haystack = f"{vacancy.title} {vacancy.description} {' '.join(vacancy.tags)}".lower()
-        return sum(delta for skill, delta in skill_feedback.items() if skill_mentioned(skill, haystack))
+        adjustment = 0
+        if skill_feedback:
+            haystack = f"{vacancy.title} {vacancy.description} {' '.join(vacancy.tags)}".lower()
+            adjustment += sum(
+                delta for skill, delta in skill_feedback.items() if skill_mentioned(skill, haystack)
+            )
+        if remote_feedback and vacancy.remote:
+            # Only "remote" is ever a key here - see get_remote_feedback's
+            # docstring for why remote=False can't be trusted as "onsite".
+            adjustment += remote_feedback.get("remote", 0)
+        if seniority_feedback:
+            level = primary_seniority_level(vacancy.title.lower())
+            if level:
+                adjustment += seniority_feedback.get(level, 0)
+        # Independent Codex review: three feedback dimensions stacking
+        # unbounded (skill alone can contribute multiple deltas) meant the
+        # 0-100 clamp below wasn't really bounding anything - it just
+        # collapsed heavily-flagged candidates to 0 or 100, indistinguishable
+        # from each other and from the vector score that put them there,
+        # before min_score filtering or LLM shortlist selection ever see
+        # them. Capping the COMBINED adjustment first keeps these as
+        # intended - soft nudges that can reorder results, not swings large
+        # enough to override the underlying semantic ranking outright.
+        return max(-FEEDBACK_MAX_TOTAL_ADJUSTMENT, min(FEEDBACK_MAX_TOTAL_ADJUSTMENT, adjustment))
 
     vector_matches = [
         VectorMatchResult(
@@ -176,9 +213,9 @@ def _compute_recommendations(
             vacancy_company=h["company"],
             vacancy_url=h["url"],
             # Clamped to the same 0-100 display scale the raw vector score
-            # already uses - the skill adjustment nudges within that scale,
-            # it doesn't get to push a match above 100 or below 0.
-            score=max(0, min(100, round(h["score"] * 100) + _skill_score_adjustment(h["vacancy_id"]))),
+            # already uses - the feedback adjustment nudges within that
+            # scale, it doesn't get to push a match above 100 or below 0.
+            score=max(0, min(100, round(h["score"] * 100) + _feedback_score_adjustment(h["vacancy_id"]))),
         )
         for h in hits
         if h["vacancy_id"] in vacancies_by_id  # guards against a stale ES doc whose MySQL row is gone
@@ -186,7 +223,7 @@ def _compute_recommendations(
         and _not_hidden(h["vacancy_id"])  # excludes vacancies explicitly dismissed/rejected
         and _company_not_excluded(h["vacancy_id"])  # excludes companies written off entirely
     ]
-    # Skill adjustments can reorder matches relative to vector_search's
+    # Feedback adjustments can reorder matches relative to vector_search's
     # original (unadjusted) ranking - re-sort before min_score filtering
     # and before slicing the LLM rerank shortlist, so both see the
     # feedback-adjusted order, not the raw ES one.

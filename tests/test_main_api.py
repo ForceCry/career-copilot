@@ -455,6 +455,103 @@ def test_skill_feedback_lowers_score_for_negative_skill(client, session):
     assert recs[0]["score"] == 80  # round(0.9 * 100) - 10 skill penalty
 
 
+def test_remote_and_seniority_feedback_stack_on_recommendation_score(client, session):
+    """End-to-end wiring check for get_remote_feedback/get_seniority_feedback
+    through _compute_recommendations - both signals apply to the SAME
+    untouched target posting (remote, junior title) and stack additively,
+    same as skill feedback already does."""
+    from src.storage.application_repo import set_status
+
+    _seed_profile(session)
+
+    for i in range(3):
+        posting = _seed_vacancy(
+            session, external_id=f"remote-junior-{i}", url=f"https://example.test/rj-{i}",
+            company=f"RemoteCo{i}", remote=True, title="Junior PHP Developer",
+        )
+        set_status(session, posting.id, "dismissed")
+
+    for i in range(2):
+        baseline = _seed_vacancy(
+            session, external_id=f"baseline-{i}", url=f"https://example.test/baseline-{i}",
+            company=f"BaselineCo{i}", remote=False, title="PHP Developer",
+        )
+        set_status(session, baseline.id, "applied")
+
+    target = _seed_vacancy(
+        session, external_id="target", url="https://example.test/target",
+        company="TargetCo", remote=True, title="Junior PHP Developer",
+    )
+
+    with patch("src.main.vector_search") as vector_search:
+        vector_search.return_value = [{
+            "vacancy_id": target.id, "source": target.source, "title": target.title,
+            "company": target.company, "url": target.url, "score": 0.9,
+        }]
+        response = client.get("/recommendations")
+
+    assert response.status_code == 200
+    recs = response.json()["recommendations"]
+    assert recs[0]["vacancy_id"] == target.id
+    # round(0.9 * 100) - 10 (remote) - 10 (junior) = 70
+    assert recs[0]["score"] == 70
+
+
+def test_combined_feedback_adjustment_is_capped(client, session):
+    """Regression: an independent Codex review found the combined skill+
+    remote+seniority adjustment was unbounded before the final 0-100
+    display clamp - enough stacked negative skills alone could swing a
+    score by more than +-20, collapsing distinct candidates to 0/100 and
+    changing min_score/LLM-shortlist eligibility, not just the number
+    shown. Three independently-negative skills here would sum to -30
+    uncapped; must clamp to -20."""
+    from src.storage.application_repo import set_status
+    from src.storage.models import Skill
+
+    profile = _seed_profile(session)
+    profile.skills += [
+        Skill(name="Symfony", category="framework"),
+        Skill(name="Laravel", category="framework"),
+        Skill(name="WordPress", category="framework"),
+    ]
+    session.add(profile)
+    session.commit()
+
+    for i in range(3):
+        posting = _seed_vacancy(
+            session, external_id=f"stack-{i}", url=f"https://example.test/stack-{i}",
+            company=f"StackCo{i}", title="Symfony Laravel WordPress role",
+            description="Symfony, Laravel and WordPress all required.",
+        )
+        set_status(session, posting.id, "dismissed")
+
+    for i in range(2):
+        baseline = _seed_vacancy(
+            session, external_id=f"baseline-{i}", url=f"https://example.test/baseline-{i}",
+            company=f"BaselineCo{i}", title="Generic backend role", description="Generic backend role.",
+        )
+        set_status(session, baseline.id, "applied")
+
+    target = _seed_vacancy(
+        session, external_id="target", url="https://example.test/target",
+        title="Symfony Laravel WordPress role", description="Symfony, Laravel and WordPress all required.",
+    )
+
+    with patch("src.main.vector_search") as vector_search:
+        vector_search.return_value = [{
+            "vacancy_id": target.id, "source": target.source, "title": target.title,
+            "company": target.company, "url": target.url, "score": 0.9,
+        }]
+        response = client.get("/recommendations")
+
+    assert response.status_code == 200
+    recs = response.json()["recommendations"]
+    assert recs[0]["vacancy_id"] == target.id
+    # round(0.9 * 100) - 30 (three -10 skills) would be 60 uncapped;
+    # capped combined adjustment is -20, so 90 - 20 = 70.
+    assert recs[0]["score"] == 70
+
+
 def test_applications_page_empty(client, session):
     response = client.get("/applications")
     assert response.status_code == 200
