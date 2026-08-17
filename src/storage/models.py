@@ -15,6 +15,12 @@ def _utcnow() -> datetime:
 # by the DB.
 APPLICATION_STATUSES = ("saved", "applied", "interviewing", "offer", "rejected", "dismissed")
 
+# Shared between recommendations filtering (main.py) and company-level
+# exclusion feedback (application_repo.get_excluded_companies) - a single
+# source of truth for "the user is done with this" so the two can't drift
+# out of sync with each other.
+NEGATIVE_APPLICATION_STATUSES = {"dismissed", "rejected"}
+
 
 class Profile(SQLModel, table=True):
     """Single-user tool: in practice there's exactly one row here, but

@@ -21,10 +21,17 @@ from .matching.vector_scorer import VectorMatchResult, vector_search  # noqa: E4
 from .observability import configure_logging  # noqa: E402
 from .salary import monthly_salary  # noqa: E402
 from .search.es_client import get_client as get_es_client  # noqa: E402
-from .storage.application_repo import get_applications_map, list_applications, set_status  # noqa: E402
+from .storage.application_repo import (  # noqa: E402
+    get_applications_map,
+    get_excluded_companies,
+    list_applications,
+    normalize_company_name,
+    set_status,
+)
 from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import (  # noqa: E402
     APPLICATION_STATUSES,
+    NEGATIVE_APPLICATION_STATUSES,
     Application,
     Profile,
     ResumeVersion,
@@ -38,7 +45,7 @@ from .storage.vacancy_repo import get_fresh_vacancy_ids, get_vacancies_by_ids, q
 # an explicit dismiss/reject should make a vacancy disappear from view,
 # not just having been acted on. /applications is the dedicated view for
 # seeing every tracked vacancy together regardless of status.
-RECOMMENDATION_HIDDEN_STATUSES = {"dismissed", "rejected"}
+RECOMMENDATION_HIDDEN_STATUSES = NEGATIVE_APPLICATION_STATUSES
 
 configure_logging()
 
@@ -130,10 +137,20 @@ def _compute_recommendations(
     vacancies_by_id = get_vacancies_by_ids(session, hit_ids)
     fresh_ids = get_fresh_vacancy_ids(session, hit_ids, RECOMMENDATION_STALE_AFTER)
     applications_by_id = get_applications_map(session, hit_ids)
+    # Explicit feedback signal from application_repo.get_excluded_companies:
+    # a company where every tracked application ended up dismissed/rejected
+    # is skipped entirely going forward, not just the specific posting(s)
+    # already acted on - deterministic, applied before any LLM rerank so
+    # the shortlist it sees is already cleaned up.
+    excluded_companies = get_excluded_companies(session)
 
     def _not_hidden(vacancy_id: int) -> bool:
         application = applications_by_id.get(vacancy_id)
         return application is None or application.status not in RECOMMENDATION_HIDDEN_STATUSES
+
+    def _company_not_excluded(vacancy_id: int) -> bool:
+        vacancy = vacancies_by_id.get(vacancy_id)
+        return vacancy is None or normalize_company_name(vacancy.company) not in excluded_companies
 
     vector_matches = [
         VectorMatchResult(
@@ -147,6 +164,7 @@ def _compute_recommendations(
         if h["vacancy_id"] in vacancies_by_id  # guards against a stale ES doc whose MySQL row is gone
         and h["vacancy_id"] in fresh_ids  # excludes postings the source has stopped returning
         and _not_hidden(h["vacancy_id"])  # excludes vacancies explicitly dismissed/rejected
+        and _company_not_excluded(h["vacancy_id"])  # excludes companies written off entirely
     ]
     vector_matches = [m for m in vector_matches if m.score >= min_score]
 

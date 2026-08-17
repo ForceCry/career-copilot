@@ -13,6 +13,7 @@ from src.ingestion.models import Vacancy  # noqa: E402
 from src.storage.application_repo import (  # noqa: E402
     get_application,
     get_applications_map,
+    get_excluded_companies,
     list_applications,
     set_status,
 )
@@ -141,6 +142,74 @@ def test_get_applications_map_bulk_lookup(session):
 
 def test_get_applications_map_empty_input(session):
     assert get_applications_map(session, []) == {}
+
+
+def test_get_excluded_companies_empty_when_nothing_tracked(session):
+    assert get_excluded_companies(session) == set()
+
+
+def test_company_excluded_once_every_tracked_application_is_negative(session):
+    _, _, ids = upsert_vacancies(
+        session, [_vacancy(external_id="1", company="BadCo"), _vacancy(external_id="2", company="BadCo")]
+    )
+    set_status(session, ids[0], "dismissed")
+    set_status(session, ids[1], "rejected")
+
+    assert get_excluded_companies(session) == {"badco"}
+
+
+def test_company_not_excluded_if_any_application_is_positive(session):
+    """One dismissed posting isn't a verdict on the whole company - a
+    saved/applied/interviewing/offer for the same company anywhere keeps
+    it out of the exclusion set."""
+    _, _, ids = upsert_vacancies(
+        session, [_vacancy(external_id="1", company="MixedCo"), _vacancy(external_id="2", company="MixedCo")]
+    )
+    set_status(session, ids[0], "dismissed")
+    set_status(session, ids[1], "applied")
+
+    assert get_excluded_companies(session) == set()
+
+
+def test_company_exclusion_lifts_after_a_later_positive_status(session):
+    vacancy_id = _seed_vacancy_id(session)
+    set_status(session, vacancy_id, "dismissed")
+    assert get_excluded_companies(session) == {"acme"}
+
+    set_status(session, vacancy_id, "applied")
+
+    assert get_excluded_companies(session) == set()
+
+
+def test_company_exclusion_normalizes_case_and_whitespace(session):
+    """Regression: an independent Codex review found company matching was
+    an exact string comparison - "Acme", "ACME", and " Acme " (plausible
+    across different sources, or the same source over time) would each be
+    tracked as a separate company instead of being recognized as the same
+    one."""
+    _, _, ids = upsert_vacancies(
+        session,
+        [_vacancy(external_id="1", company="Acme"), _vacancy(external_id="2", company=" ACME ")],
+    )
+    set_status(session, ids[0], "dismissed")
+    set_status(session, ids[1], "rejected")
+
+    assert get_excluded_companies(session) == {"acme"}
+
+
+def test_blank_company_name_never_excluded(session):
+    """Regression: an independent Codex review found a blank/unknown
+    company name ("") was being treated as a real, shared company key -
+    dismissing one company-less posting would then hide every OTHER
+    company-less posting too, since an absent company name isn't evidence
+    two postings are from the same employer."""
+    _, _, ids = upsert_vacancies(
+        session, [_vacancy(external_id="1", company=""), _vacancy(external_id="2", company="  ")]
+    )
+    set_status(session, ids[0], "dismissed")
+    set_status(session, ids[1], "rejected")
+
+    assert get_excluded_companies(session) == set()
 
 
 def test_set_status_recovers_from_concurrent_create_race(session, monkeypatch):

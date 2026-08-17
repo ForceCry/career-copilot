@@ -1,10 +1,17 @@
+from collections import defaultdict
 from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from .models import APPLICATION_STATUSES, Application, ApplicationEvent
+from .models import (
+    APPLICATION_STATUSES,
+    NEGATIVE_APPLICATION_STATUSES,
+    Application,
+    ApplicationEvent,
+    VacancyRecord,
+)
 
 
 def _utcnow() -> datetime:
@@ -115,3 +122,57 @@ def list_applications(session: Session, statuses: list[str] | None = None) -> li
     if statuses:
         query = query.where(Application.status.in_(statuses))
     return session.exec(query.order_by(Application.updated_at.desc())).all()
+
+
+def normalize_company_name(name: str) -> str:
+    """Same real-world company can arrive with different casing/whitespace
+    across sources (or even the same source over time) - "Acme", "ACME",
+    " Acme " should all match for exclusion purposes. Callers on both
+    sides of the exclusion check (get_excluded_companies below, and
+    _company_not_excluded in main.py) must normalize through this same
+    function, or the comparison silently stops working. Flagged by an
+    independent Codex review."""
+    return name.strip().casefold()
+
+
+def get_excluded_companies(session: Session) -> set[str]:
+    """Explicit feedback signal for recommendations: a company is excluded
+    once every application tracked for it ended up dismissed/rejected -
+    not the instant a single posting does, since one bad-fit role isn't a
+    verdict on the whole company. A single saved/applied/interviewing/
+    offer anywhere for that company keeps it out of this set (and pulls
+    it back out automatically if the user later engages positively with a
+    company they'd previously written off elsewhere).
+
+    Returns normalize_company_name()'d keys. Blank/whitespace-only company
+    names are never included even if every application against them is
+    negative - an absent company name isn't evidence two postings belong
+    to the same employer, and treating "" as a shared key would hide
+    every future company-less posting after just one dismissal. Flagged
+    by an independent Codex review.
+
+    Reads every tracked application, not just ones touching the current
+    candidate hit set - one join query, materialized and grouped in
+    Python, not a SQL GROUP BY/HAVING. An independent Codex review flagged
+    this as something that scales with total application history rather
+    than the ~100-row hit set a single request actually needs; deliberately
+    left as-is for now - a single-user tool's application table isn't
+    going to reach a size where that matters, and scoping the query to the
+    current hit set would couple this function's signature to its one
+    caller for a cost saving that doesn't exist yet."""
+    rows = session.exec(
+        select(VacancyRecord.company, Application.status).join(
+            Application, Application.vacancy_id == VacancyRecord.id
+        )
+    ).all()
+    statuses_by_company: dict[str, set[str]] = defaultdict(set)
+    for company, status in rows:
+        key = normalize_company_name(company)
+        if not key:
+            continue
+        statuses_by_company[key].add(status)
+    return {
+        company
+        for company, statuses in statuses_by_company.items()
+        if statuses and statuses <= NEGATIVE_APPLICATION_STATUSES
+    }

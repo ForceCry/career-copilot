@@ -353,6 +353,54 @@ def test_saved_vacancy_still_shown_in_recommendations(client, session):
     assert response.json()["count"] == 1
 
 
+def test_company_excluded_from_recommendations_once_all_negative(client, session):
+    """Regression/feature check: get_excluded_companies feeds the
+    recommendations pipeline - once every application tracked for a
+    company is dismissed/rejected, a DIFFERENT posting from that same
+    company (never individually acted on) should stop showing up too."""
+    _seed_profile(session)
+    dismissed = _seed_vacancy(session, external_id="1", company="BadCo", url="https://example.test/1")
+    other_posting = _seed_vacancy(session, external_id="2", company="BadCo", url="https://example.test/2")
+
+    from src.storage.application_repo import set_status
+    set_status(session, dismissed.id, "dismissed")
+
+    with patch("src.main.vector_search") as vector_search:
+        vector_search.return_value = _vector_search_hit(other_posting)
+        response = client.get("/recommendations")
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 0
+
+
+def test_company_exclusion_lifts_after_positive_status_at_same_company(client, session):
+    """The other half of the company-exclusion feature: a later positive
+    status for the company (even on a different posting) should restore
+    visibility for OTHER, never-individually-touched postings from that
+    company - not just prevent hiding it in the first place."""
+    _seed_profile(session)
+    dismissed = _seed_vacancy(session, external_id="1", company="BadCo", url="https://example.test/1")
+    untouched = _seed_vacancy(session, external_id="2", company="BadCo", url="https://example.test/2")
+    applied_elsewhere = _seed_vacancy(session, external_id="3", company="BadCo", url="https://example.test/3")
+
+    from src.storage.application_repo import set_status
+    set_status(session, dismissed.id, "dismissed")
+
+    with patch("src.main.vector_search") as vector_search:
+        vector_search.return_value = _vector_search_hit(untouched)
+        excluded_response = client.get("/recommendations")
+    assert excluded_response.json()["count"] == 0
+
+    set_status(session, applied_elsewhere.id, "applied")
+
+    with patch("src.main.vector_search") as vector_search:
+        vector_search.return_value = _vector_search_hit(untouched)
+        restored_response = client.get("/recommendations")
+
+    assert restored_response.status_code == 200
+    assert restored_response.json()["count"] == 1
+
+
 def test_applications_page_empty(client, session):
     response = client.get("/applications")
     assert response.status_code == 200
