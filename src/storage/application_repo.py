@@ -176,3 +176,104 @@ def get_excluded_companies(session: Session) -> set[str]:
         for company, statuses in statuses_by_company.items()
         if statuses and statuses <= NEGATIVE_APPLICATION_STATUSES
     }
+
+
+# A skill only counts as signal once it's shown up across enough tracked
+# decisions - one dismissed posting that happens to mention "Docker" says
+# nothing about Docker itself (dozens of unrelated reasons could explain a
+# single dismissal), so a lone data point is noise, not feedback. This is a
+# much weaker signal than company exclusion (where "every posting from
+# this company" is a clean, direct verdict on the company) - skills are
+# just one of many things a posting's text happens to mention, so this
+# needs both a minimum sample size and a lopsided majority before treating
+# it as real signal.
+SKILL_MIN_SAMPLES = 3
+# A skill's own dismiss rate must clear the user's OVERALL dismiss rate by
+# this much (in either direction) before it counts as signal - not an
+# absolute threshold. Caught empirically while writing this function's own
+# tests: a candidate's core/primary skill (their whole job search is
+# built around it, so it's mentioned in nearly every posting's title) will
+# get dismissed at roughly the SAME rate as everything else, simply
+# because it's ubiquitous - an absolute "80% of postings mentioning X got
+# dismissed" threshold would spuriously flag it as negative feedback the
+# moment the user's overall dismiss rate crosses 80% too, systematically
+# deprioritizing their own specialty. Comparing against the baseline
+# instead only flags a skill that's dismissed (or engaged with)
+# disproportionately MORE than everything else.
+SKILL_SIGNAL_MARGIN = 0.3
+SKILL_SCORE_ADJUSTMENT = 10
+
+
+def skill_mentioned(skill: str, haystack: str) -> bool:
+    """Whole-word(ish) match, not plain substring - flagged by an
+    independent Codex review: bare `skill in haystack` let a short skill
+    name like "Go", "R", or "C" match inside ordinary words ("good",
+    "career", "backend"), producing skill feedback that has nothing to do
+    with the skill itself. `skill` and `haystack` must both already be
+    lowercased by the caller (this just walks raw string offsets, no
+    normalization here). Deliberately NOT a regex \\b word-boundary check:
+    that breaks for symbol-suffixed skills like "C++" or "C#" - \\b only
+    fires at a transition between a word char and a non-word char, and
+    there's no such transition between a trailing symbol and following
+    whitespace/punctuation (both already non-word), so `\\bC\\+\\+\\b`
+    fails to match "C++ developer". Checking that the char immediately
+    before/after the match isn't itself alphanumeric sidesteps that
+    entirely - punctuation and symbols on either side are always fine."""
+    start = 0
+    while True:
+        idx = haystack.find(skill, start)
+        if idx == -1:
+            return False
+        before_ok = idx == 0 or not haystack[idx - 1].isalnum()
+        after_idx = idx + len(skill)
+        after_ok = after_idx == len(haystack) or not haystack[after_idx].isalnum()
+        if before_ok and after_ok:
+            return True
+        start = idx + 1
+
+
+def get_skill_feedback(session: Session, skill_names: list[str]) -> dict[str, int]:
+    """Explicit feedback signal for recommendations: for each of the
+    candidate's own profile skills, look at every tracked application
+    whose vacancy text mentions that skill, and see whether those
+    decisions lean dismissed/rejected disproportionately more or less
+    than the user's overall dismiss rate (see SKILL_SIGNAL_MARGIN - a
+    skill that just mirrors the baseline isn't informative, no matter how
+    lopsided that baseline itself is). Needs at least SKILL_MIN_SAMPLES
+    tracked postings mentioning the skill before drawing any conclusion.
+    This is a soft re-ranking nudge applied to vector-search scores, not
+    a hard filter like get_excluded_companies, since the signal is
+    inherently noisier."""
+    if not skill_names:
+        return {}
+    rows = session.exec(
+        select(VacancyRecord.title, VacancyRecord.description, VacancyRecord.tags, Application.status).join(
+            Application, Application.vacancy_id == VacancyRecord.id
+        )
+    ).all()
+    if not rows:
+        return {}
+
+    negative_rows = sum(1 for *_, status in rows if status in NEGATIVE_APPLICATION_STATUSES)
+    baseline_negative_ratio = negative_rows / len(rows)
+
+    counts: dict[str, dict[str, int]] = defaultdict(lambda: {"positive": 0, "negative": 0})
+    for title, description, tags, status in rows:
+        haystack = f"{title} {description} {tags}".lower()
+        outcome = "negative" if status in NEGATIVE_APPLICATION_STATUSES else "positive"
+        for skill in skill_names:
+            key = skill.strip().lower()
+            if key and skill_mentioned(key, haystack):
+                counts[key][outcome] += 1
+
+    feedback: dict[str, int] = {}
+    for skill, outcome_counts in counts.items():
+        total = outcome_counts["positive"] + outcome_counts["negative"]
+        if total < SKILL_MIN_SAMPLES:
+            continue
+        negative_ratio = outcome_counts["negative"] / total
+        if negative_ratio - baseline_negative_ratio >= SKILL_SIGNAL_MARGIN:
+            feedback[skill] = -SKILL_SCORE_ADJUSTMENT
+        elif baseline_negative_ratio - negative_ratio >= SKILL_SIGNAL_MARGIN:
+            feedback[skill] = SKILL_SCORE_ADJUSTMENT
+    return feedback

@@ -24,9 +24,11 @@ from .search.es_client import get_client as get_es_client  # noqa: E402
 from .storage.application_repo import (  # noqa: E402
     get_applications_map,
     get_excluded_companies,
+    get_skill_feedback,
     list_applications,
     normalize_company_name,
     set_status,
+    skill_mentioned,
 )
 from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import (  # noqa: E402
@@ -143,6 +145,14 @@ def _compute_recommendations(
     # already acted on - deterministic, applied before any LLM rerank so
     # the shortlist it sees is already cleaned up.
     excluded_companies = get_excluded_companies(session)
+    # Explicit feedback signal from application_repo.get_skill_feedback: a
+    # candidate's own profile skill that's mentioned in postings the user
+    # has consistently dismissed/rejected nudges similar future postings
+    # down; one they've consistently engaged with (saved/applied/...)
+    # nudges them up. A soft score adjustment, not a hard filter like the
+    # company exclusion above - the signal is noisier (a skill mentioned
+    # in a description isn't necessarily WHY a posting was dismissed).
+    skill_feedback = get_skill_feedback(session, [s.name for s in profile.skills])
 
     def _not_hidden(vacancy_id: int) -> bool:
         application = applications_by_id.get(vacancy_id)
@@ -152,13 +162,23 @@ def _compute_recommendations(
         vacancy = vacancies_by_id.get(vacancy_id)
         return vacancy is None or normalize_company_name(vacancy.company) not in excluded_companies
 
+    def _skill_score_adjustment(vacancy_id: int) -> int:
+        vacancy = vacancies_by_id.get(vacancy_id)
+        if vacancy is None or not skill_feedback:
+            return 0
+        haystack = f"{vacancy.title} {vacancy.description} {' '.join(vacancy.tags)}".lower()
+        return sum(delta for skill, delta in skill_feedback.items() if skill_mentioned(skill, haystack))
+
     vector_matches = [
         VectorMatchResult(
             vacancy_id=h["vacancy_id"],
             vacancy_title=h["title"],
             vacancy_company=h["company"],
             vacancy_url=h["url"],
-            score=round(h["score"] * 100),
+            # Clamped to the same 0-100 display scale the raw vector score
+            # already uses - the skill adjustment nudges within that scale,
+            # it doesn't get to push a match above 100 or below 0.
+            score=max(0, min(100, round(h["score"] * 100) + _skill_score_adjustment(h["vacancy_id"]))),
         )
         for h in hits
         if h["vacancy_id"] in vacancies_by_id  # guards against a stale ES doc whose MySQL row is gone
@@ -166,6 +186,11 @@ def _compute_recommendations(
         and _not_hidden(h["vacancy_id"])  # excludes vacancies explicitly dismissed/rejected
         and _company_not_excluded(h["vacancy_id"])  # excludes companies written off entirely
     ]
+    # Skill adjustments can reorder matches relative to vector_search's
+    # original (unadjusted) ranking - re-sort before min_score filtering
+    # and before slicing the LLM rerank shortlist, so both see the
+    # feedback-adjusted order, not the raw ES one.
+    vector_matches.sort(key=lambda m: m.score, reverse=True)
     vector_matches = [m for m in vector_matches if m.score >= min_score]
 
     if llm_rerank_top_n > 0:

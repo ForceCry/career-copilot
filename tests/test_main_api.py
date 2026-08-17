@@ -401,6 +401,60 @@ def test_company_exclusion_lifts_after_positive_status_at_same_company(client, s
     assert restored_response.json()["count"] == 1
 
 
+def test_skill_feedback_lowers_score_for_negative_skill(client, session):
+    """A profile skill mentioned in postings the user has consistently
+    dismissed nudges OTHER postings mentioning that same skill down in
+    score - not hidden outright (skills are a noisier signal than company
+    exclusion), just deprioritized."""
+    from src.storage.application_repo import set_status
+    from src.storage.models import Skill
+
+    profile = _seed_profile(session)
+    profile.skills.append(Skill(name="WordPress", category="language"))
+    session.add(profile)
+    session.commit()
+
+    for i in range(3):
+        # title deliberately doesn't say "PHP Developer" (_seed_vacancy's
+        # default) - profile also has a PHP skill, and this test only
+        # wants a WordPress-specific signal, not an incidental PHP one
+        # from every posting's title happening to mention it too.
+        posting = _seed_vacancy(
+            session, external_id=f"wp-{i}", url=f"https://example.test/wp-{i}",
+            company="WPCo", title="WordPress Developer",
+            description="WordPress theme development role.",
+        )
+        set_status(session, posting.id, "dismissed")
+
+    # Baseline contrast, without which "100% of WordPress postings
+    # dismissed" would just equal the user's overall dismiss rate (also
+    # 100%) and get_skill_feedback's baseline-relative check wouldn't
+    # treat it as WordPress-specific signal at all.
+    for i in range(2):
+        baseline = _seed_vacancy(
+            session, external_id=f"baseline-{i}", url=f"https://example.test/baseline-{i}",
+            company="OkCo", description="Generic backend role.",
+        )
+        set_status(session, baseline.id, "applied")
+
+    target = _seed_vacancy(
+        session, external_id="target", url="https://example.test/target",
+        description="Custom WordPress plugin work.",
+    )
+
+    with patch("src.main.vector_search") as vector_search:
+        vector_search.return_value = [{
+            "vacancy_id": target.id, "source": target.source, "title": target.title,
+            "company": target.company, "url": target.url, "score": 0.9,
+        }]
+        response = client.get("/recommendations")
+
+    assert response.status_code == 200
+    recs = response.json()["recommendations"]
+    assert recs[0]["vacancy_id"] == target.id
+    assert recs[0]["score"] == 80  # round(0.9 * 100) - 10 skill penalty
+
+
 def test_applications_page_empty(client, session):
     response = client.get("/applications")
     assert response.status_code == 200

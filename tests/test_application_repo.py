@@ -14,8 +14,10 @@ from src.storage.application_repo import (  # noqa: E402
     get_application,
     get_applications_map,
     get_excluded_companies,
+    get_skill_feedback,
     list_applications,
     set_status,
+    skill_mentioned,
 )
 from src.storage.models import Application  # noqa: E402
 from src.storage.vacancy_repo import upsert_vacancies  # noqa: E402
@@ -210,6 +212,176 @@ def test_blank_company_name_never_excluded(session):
     set_status(session, ids[1], "rejected")
 
     assert get_excluded_companies(session) == set()
+
+
+def test_skill_mentioned_rejects_short_skill_inside_an_unrelated_word(session):
+    """Regression: an independent Codex review found plain `skill in
+    haystack` let a short skill name match inside ordinary words - "go"
+    is a substring of "good", "r" is a substring of "career", neither
+    mention has anything to do with the Go or R programming languages."""
+    assert skill_mentioned("go", "looking for a good backend developer") is False
+    assert skill_mentioned("r", "join our career team") is False
+
+
+def test_skill_mentioned_matches_a_standalone_short_skill(session):
+    assert skill_mentioned("go", "we need a go developer") is True
+    assert skill_mentioned("go", "experience with go.") is True
+    assert skill_mentioned("go", "(go/golang) role") is True
+
+
+def test_skill_mentioned_matches_symbol_suffixed_skills(session):
+    """Not a regex \\b check - that fails here, since \\b never fires
+    between a trailing symbol and following whitespace (neither side is a
+    \\w character)."""
+    assert skill_mentioned("c++", "looking for a c++ developer") is True
+    assert skill_mentioned("c#", "c#/.net backend role") is True
+
+
+def test_skill_feedback_empty_with_no_skill_names(session):
+    assert get_skill_feedback(session, []) == {}
+
+
+def test_skill_feedback_empty_below_min_sample_size(session):
+    """Two dismissed postings mentioning a skill isn't enough to call it
+    signal - a lone/pair of dismissals could be for any unrelated reason."""
+    _, _, ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", description="Looking for a WordPress expert."),
+            _vacancy(external_id="2", description="WordPress and PHP required."),
+        ],
+    )
+    for vid in ids:
+        set_status(session, vid, "dismissed")
+
+    assert get_skill_feedback(session, ["WordPress"]) == {}
+
+
+def test_skill_feedback_negative_when_dismissed_disproportionately_more_than_baseline(session):
+    """Not just "mostly dismissed" - dismissed at a rate meaningfully
+    HIGHER than the user's overall dismiss rate. Without a baseline-
+    relative comparison, a skill mentioned in every tracked posting would
+    just mirror however lopsided the user's overall accept/reject rate
+    happens to be, which isn't skill-specific signal at all."""
+    _, _, negative_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", description="Looking for a WordPress expert."),
+            _vacancy(external_id="2", description="WordPress and PHP required."),
+            _vacancy(external_id="3", description="Senior WordPress developer wanted."),
+        ],
+    )
+    _, _, baseline_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", description="Generic backend role."),
+            _vacancy(external_id="5", description="Another generic backend role."),
+        ],
+    )
+    for vid in negative_ids:
+        set_status(session, vid, "dismissed")
+    for vid in baseline_ids:
+        set_status(session, vid, "applied")
+
+    # baseline dismiss rate: 3/5 = 0.6; wordpress-specific: 3/3 = 1.0 -
+    # a 0.4 gap, over the 0.3 margin.
+    assert get_skill_feedback(session, ["WordPress"]) == {"wordpress": -10}
+
+
+def test_skill_feedback_ignores_short_skill_matched_inside_unrelated_word(session):
+    """End-to-end version of the skill_mentioned regression above: three
+    dismissed postings that happen to say "good fit" shouldn't produce a
+    negative signal for a "Go" skill just because "go" is a substring of
+    "good"."""
+    _, _, negative_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", description="Looking for a good backend developer."),
+            _vacancy(external_id="2", description="Would be a good culture fit."),
+            _vacancy(external_id="3", description="Good opportunity, PHP required."),
+        ],
+    )
+    _, _, baseline_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", description="Generic backend role."),
+            _vacancy(external_id="5", description="Another generic backend role."),
+        ],
+    )
+    for vid in negative_ids:
+        set_status(session, vid, "dismissed")
+    for vid in baseline_ids:
+        set_status(session, vid, "applied")
+
+    assert get_skill_feedback(session, ["Go"]) == {}
+
+
+def test_skill_feedback_negative_signal_does_not_fire_for_a_ubiquitous_skill(session):
+    """Regression for the bug caught while designing this function: a
+    skill mentioned in EVERY tracked posting (e.g. the user's own core
+    stack, present in nearly every job title in their search results)
+    will get dismissed at roughly the same rate as everything else,
+    simply because it's everywhere - that must NOT be flagged as
+    negative feedback just because the user's overall dismiss rate is
+    high."""
+    _, _, ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", description="PHP role one."),
+            _vacancy(external_id="2", description="PHP role two."),
+            _vacancy(external_id="3", description="PHP role three."),
+            _vacancy(external_id="4", description="PHP role four."),
+        ],
+    )
+    # 80% dismissed overall - a high bar that would trip the old absolute
+    # threshold, but PHP is mentioned in ALL four, so it's exactly at
+    # baseline, not above it.
+    for status, vid in zip(["dismissed", "dismissed", "dismissed", "applied"], ids):
+        set_status(session, vid, status)
+
+    assert get_skill_feedback(session, ["PHP"]) == {}
+
+
+def test_skill_feedback_positive_when_engaged_disproportionately_more_than_baseline(session):
+    _, _, positive_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", description="Symfony backend role."),
+            _vacancy(external_id="2", description="We use Symfony 6 heavily."),
+            _vacancy(external_id="3", description="Symfony + API Platform team."),
+        ],
+    )
+    _, _, baseline_ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="4", description="Generic backend role."),
+            _vacancy(external_id="5", description="Another generic backend role."),
+        ],
+    )
+    for status, vid in zip(["saved", "applied", "interviewing"], positive_ids):
+        set_status(session, vid, status)
+    for vid in baseline_ids:
+        set_status(session, vid, "dismissed")
+
+    # baseline dismiss rate: 2/5 = 0.4; symfony-specific: 0/3 = 0.0 - a
+    # 0.4 gap, over the 0.3 margin.
+    assert get_skill_feedback(session, ["Symfony"]) == {"symfony": 10}
+
+
+def test_skill_feedback_no_signal_when_outcomes_are_mixed(session):
+    _, _, ids = upsert_vacancies(
+        session,
+        [
+            _vacancy(external_id="1", description="Laravel developer wanted."),
+            _vacancy(external_id="2", description="Laravel and Vue."),
+            _vacancy(external_id="3", description="Laravel API role."),
+            _vacancy(external_id="4", description="Laravel monolith."),
+        ],
+    )
+    for status, vid in zip(["dismissed", "applied", "dismissed", "applied"], ids):
+        set_status(session, vid, status)
+
+    assert get_skill_feedback(session, ["Laravel"]) == {}
 
 
 def test_set_status_recovers_from_concurrent_create_race(session, monkeypatch):
