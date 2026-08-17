@@ -33,15 +33,27 @@ agent rather than prose for a person.
   embedding can't judge (seniority, overqualification, gaps a similarity
   score misses), via your own local Claude Code session — no API key
   to manage
+- **Application tracking** — saved/applied/interviewing/offer/rejected/
+  dismissed states with an append-only transition history, a pipeline
+  view (`/applications`), and a quick status-select right on the
+  recommendations feed
+- **Feedback-driven ranking** — dismissing or engaging with postings
+  feeds back into future recommendations: companies you've written off
+  entirely get excluded, and skills/remote-work/seniority levels you
+  consistently dismiss get nudged down — measured against your *own*
+  baseline dismiss rate, not a fixed threshold, so a candidate's core
+  stack doesn't get penalized just for showing up in every posting
 - **Tailored artifacts** — generated cover letters and resume-tailoring
-  suggestions per posting, grounded only in what's actually in your profile
+  suggestions per posting, grounded only in what's actually in your
+  profile, persisted so past generations stay available from the
+  applications pipeline
 - **Freshness-aware recommendations** — a posting a source stops
   returning (closed, expired, pulled) drops out of recommendations
   automatically, not just on the next full re-ingest
 - **Production-shaped, not a toy** — Alembic migrations, structured
   JSON logging, Prometheus/Grafana monitoring (10-panel dashboard,
   provisioned out of the box), non-root containers, CI across every
-  package, 80 automated tests
+  package, 151 automated tests
 
 ## Tech stack
 
