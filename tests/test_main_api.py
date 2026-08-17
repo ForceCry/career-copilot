@@ -568,3 +568,148 @@ def test_applications_page_shows_tracked_vacancy(client, session):
     assert response.status_code == 200
     assert vacancy.title in response.text
     assert "via referral" in response.text
+
+
+def test_cover_letter_generates_and_persists_artifact(client, session):
+    """Item 3: replaces the old GET-with-full-description-in-query-string
+    design - the vacancy is looked up by id, and the generated letter is
+    persisted (GeneratedArtifact) rather than being lost once the
+    response closes. Post/Redirect/Get: the response is a redirect to
+    the saved artifact's own URL, not the rendered page directly - a
+    refresh/resubmit shouldn't re-run the LLM call."""
+    _seed_profile(session)
+    vacancy = _seed_vacancy(session)
+
+    with patch("src.main.generate_cover_letter") as generate_cover_letter:
+        generate_cover_letter.return_value = "Dear hiring manager, ..."
+        response = client.post(
+            f"/vacancies/{vacancy.id}/cover-letter",
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+
+    from src.storage.artifact_repo import list_artifacts_for_vacancy
+    artifacts = list_artifacts_for_vacancy(session, vacancy.id)
+    assert len(artifacts) == 1
+    assert artifacts[0].artifact_type == "cover_letter"
+    assert artifacts[0].content == "Dear hiring manager, ..."
+    assert artifacts[0].vacancy_title == vacancy.title
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/artifacts/{artifacts[0].id}"
+
+
+def test_cover_letter_404_for_unknown_vacancy(client, session):
+    _seed_profile(session)
+    response = client.post("/vacancies/999999/cover-letter", headers={"Origin": "http://testserver"})
+    assert response.status_code == 404
+
+
+def test_cover_letter_requires_seeded_profile(client, session):
+    vacancy = _seed_vacancy(session)
+    response = client.post(
+        f"/vacancies/{vacancy.id}/cover-letter", headers={"Origin": "http://testserver"}
+    )
+    assert response.status_code == 404
+
+
+def test_cover_letter_rejects_cross_origin(client, session):
+    vacancy = _seed_vacancy(session)
+    response = client.post(
+        f"/vacancies/{vacancy.id}/cover-letter", headers={"Origin": "https://evil.example"}
+    )
+    assert response.status_code == 403
+
+
+def test_cover_letter_rejects_missing_origin_and_referer(client, session):
+    """Stricter than the status-update endpoint's CSRF check: these
+    generation routes trigger a real, paid LLM call and a DB write per
+    POST, so - unlike /vacancies/{id}/status - a request with NEITHER
+    Origin nor Referer is rejected rather than let through. Flagged by
+    an independent Codex review of the original always-lenient check."""
+    vacancy = _seed_vacancy(session)
+    response = client.post(f"/vacancies/{vacancy.id}/cover-letter")
+    assert response.status_code == 403
+
+
+def test_tailoring_suggestions_generates_and_persists_artifact(client, session):
+    _seed_profile(session)
+    vacancy = _seed_vacancy(session)
+
+    with patch("src.main.suggest_resume_tailoring") as suggest_resume_tailoring:
+        suggest_resume_tailoring.return_value = "- Emphasize backend experience"
+        response = client.post(
+            f"/vacancies/{vacancy.id}/tailoring-suggestions",
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+
+    from src.storage.artifact_repo import list_artifacts_for_vacancy
+    artifacts = list_artifacts_for_vacancy(session, vacancy.id)
+    assert len(artifacts) == 1
+    assert artifacts[0].artifact_type == "tailoring_suggestions"
+    assert artifacts[0].content == "- Emphasize backend experience"
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/artifacts/{artifacts[0].id}"
+
+
+def test_get_artifact_renders_saved_content(client, session):
+    vacancy = _seed_vacancy(session)
+    from src.storage.artifact_repo import save_artifact
+    artifact = save_artifact(
+        session, vacancy.id, "cover_letter", "Dear hiring manager, ...",
+        vacancy.title, vacancy.company, vacancy.url,
+    )
+
+    response = client.get(f"/artifacts/{artifact.id}")
+
+    assert response.status_code == 200
+    assert "Dear hiring manager" in response.text
+    assert vacancy.title in response.text
+
+
+def test_get_artifact_renders_snapshot_not_current_vacancy_data(client, session):
+    """Regression: an independent Codex review found the artifact viewer
+    used to look up the CURRENT VacancyRecord - re-ingestion overwrites
+    company/url/description in place, so an old letter could silently
+    display next to a different company than it was written for."""
+    vacancy = _seed_vacancy(session)
+    from src.storage.artifact_repo import save_artifact
+    artifact = save_artifact(
+        session, vacancy.id, "cover_letter", "Dear hiring manager, ...",
+        "Old Title", "Old Co", "https://example.test/old",
+    )
+
+    vacancy.title, vacancy.company, vacancy.url = "New Title", "New Co", "https://example.test/new"
+    session.add(vacancy)
+    session.commit()
+
+    response = client.get(f"/artifacts/{artifact.id}")
+
+    assert response.status_code == 200
+    assert "Old Title" in response.text
+    assert "Old Co" in response.text
+    assert "New Title" not in response.text
+    assert "New Co" not in response.text
+
+
+def test_get_artifact_404_for_unknown_id(client, session):
+    response = client.get("/artifacts/999999")
+    assert response.status_code == 404
+
+
+def test_applications_page_shows_saved_artifact_link(client, session):
+    vacancy = _seed_vacancy(session)
+    from src.storage.application_repo import set_status
+    from src.storage.artifact_repo import save_artifact
+    set_status(session, vacancy.id, "applied")
+    artifact = save_artifact(
+        session, vacancy.id, "cover_letter", "Dear hiring manager, ...",
+        vacancy.title, vacancy.company, vacancy.url,
+    )
+
+    response = client.get("/applications")
+
+    assert response.status_code == 200
+    assert f"/artifacts/{artifact.id}" in response.text

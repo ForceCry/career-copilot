@@ -176,3 +176,39 @@ class ApplicationEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow)
 
     application: Application = Relationship(back_populates="events")
+
+
+ARTIFACT_TYPES = ("cover_letter", "tailoring_suggestions")
+
+
+class GeneratedArtifact(SQLModel, table=True):
+    """An LLM-generated cover letter or resume-tailoring suggestion for a
+    specific vacancy - append-only, never overwritten in place, same
+    pattern as ResumeVersion/ApplicationEvent, so regenerating (the
+    underlying profile changed, or just wanting a second attempt) doesn't
+    lose a version someone might still want to compare against. Keyed to
+    vacancy_id directly rather than application_id - generating one of
+    these doesn't require the vacancy to be tracked in the applications
+    pipeline at all (e.g. previewing a cover letter before deciding
+    whether to apply).
+
+    vacancy_title/company/url are a denormalized snapshot taken at
+    generation time, not a live join to VacancyRecord - flagged by an
+    independent Codex review: VacancyRecord's fields get overwritten in
+    place on re-ingestion (upsert_vacancies refreshes title/company/url/
+    description for a still-open posting), so a letter viewed weeks later
+    against the CURRENT vacancy row could appear to be about a different
+    company or link than what it was actually written for. The generated
+    content itself is a snapshot for the same reason (already true before
+    this fix) - the display context needs to match it."""
+
+    __tablename__ = "generated_artifact"
+
+    id: int | None = Field(default=None, primary_key=True)
+    vacancy_id: int = Field(foreign_key="vacancy.id", index=True)
+    artifact_type: str = Field(index=True)  # one of ARTIFACT_TYPES
+    content: str = Field(sa_column=Column(Text))
+    vacancy_title: str
+    vacancy_company: str
+    vacancy_url: str = Field(sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=_utcnow)

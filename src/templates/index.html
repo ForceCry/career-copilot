@@ -205,18 +205,10 @@
       </div>
     {% endif %}
     <div class="rec-actions">
-      <form method="get" action="/cover-letter" target="_blank">
-        <input type="hidden" name="title" value="{{ rec.title }}">
-        <input type="hidden" name="company" value="{{ rec.company }}">
-        <input type="hidden" name="url" value="{{ rec.url }}">
-        <input type="hidden" name="description" value="{{ rec.description }}">
+      <form method="post" action="/vacancies/{{ rec.vacancy_id }}/cover-letter" target="_blank">
         <button type="submit">Cover letter</button>
       </form>
-      <form method="get" action="/tailoring-suggestions" target="_blank">
-        <input type="hidden" name="title" value="{{ rec.title }}">
-        <input type="hidden" name="company" value="{{ rec.company }}">
-        <input type="hidden" name="url" value="{{ rec.url }}">
-        <input type="hidden" name="description" value="{{ rec.description }}">
+      <form method="post" action="/vacancies/{{ rec.vacancy_id }}/tailoring-suggestions" target="_blank">
         <button type="submit">Tailor resume</button>
       </form>
       <form method="post" action="/vacancies/{{ rec.vacancy_id }}/status" class="status-form">

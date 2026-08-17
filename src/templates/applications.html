@@ -72,6 +72,31 @@
     cursor: pointer;
     color: inherit;
   }
+  .artifacts {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    font-size: 0.78rem;
+  }
+  .artifacts a {
+    color: inherit;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    text-decoration: none;
+  }
+  .artifacts form { display: inline; }
+  .artifacts button {
+    font-size: 0.78rem;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px dashed var(--border);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -115,6 +140,20 @@
       </div>
       <button type="submit">Save</button>
     </form>
+    <div class="artifacts">
+      {% for artifact in item.artifacts %}
+      <a href="/artifacts/{{ artifact.id }}" target="_blank">
+        {{ "Cover letter" if artifact.artifact_type == "cover_letter" else "Tailoring notes" }}
+        &middot; {{ artifact.created_at.strftime("%Y-%m-%d") }}
+      </a>
+      {% endfor %}
+      <form method="post" action="/vacancies/{{ item.vacancy_id }}/cover-letter" target="_blank">
+        <button type="submit">+ Cover letter</button>
+      </form>
+      <form method="post" action="/vacancies/{{ item.vacancy_id }}/tailoring-suggestions" target="_blank">
+        <button type="submit">+ Tailoring notes</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
   {% endif %}

@@ -33,11 +33,13 @@ from .storage.application_repo import (  # noqa: E402
     set_status,
     skill_mentioned,
 )
+from .storage.artifact_repo import list_artifacts_for_vacancies, save_artifact  # noqa: E402
 from .storage.db import engine, get_session, init_db  # noqa: E402
 from .storage.models import (  # noqa: E402
     APPLICATION_STATUSES,
     NEGATIVE_APPLICATION_STATUSES,
     Application,
+    GeneratedArtifact,
     Profile,
     ResumeVersion,
     VacancyRecord,
@@ -415,82 +417,114 @@ def get_resume_version(version_id: int, session: Session = Depends(get_session))
     return HTMLResponse(version.content_html)
 
 
-def _vacancy_from_params(title: str, company: str, url: str, description: str) -> Vacancy:
-    # Takes vacancy details straight from the link/form that triggered the
-    # action rather than looking up a stored record by id - simpler, and
-    # these routes don't otherwise need a DB round trip.
-    return Vacancy(
-        source="manual", external_id=url, title=title, company=company,
-        location="", remote=False, url=url, description=description, tags=[],
-    )
+@app.post("/vacancies/{vacancy_id}/cover-letter")
+def cover_letter(request: Request, vacancy_id: int, session: Session = Depends(get_session)):
+    """Generates a cover letter for an already-ingested vacancy and
+    persists it (GeneratedArtifact, append-only - see
+    artifact_repo.save_artifact), then redirects to GET /artifacts/{id}
+    (Post/Redirect/Get) rather than rendering the result directly.
+    Flagged by an independent Codex review: returning the rendered page
+    straight from the POST meant a page refresh or a browser's "resend
+    form data?" resubmission prompt re-ran the LLM call and appended a
+    second artifact - real cost and time, not just a display glitch. PRG
+    also gives every generated artifact a durable, bookmarkable URL
+    immediately, which matters for vacancies not (yet) tracked in
+    /applications - that page is the only other place a saved artifact's
+    link shows up.
 
-
-@app.get("/cover-letter", response_class=HTMLResponse)
-def cover_letter(
-    request: Request,
-    title: str,
-    company: str,
-    url: str,
-    description: str,
-    session: Session = Depends(get_session),
-):
+    POST by vacancy_id, not GET with the full posting title/company/url/
+    description in the query string (the original design) - this calls
+    the local LLM (real cost, several seconds) and now writes to the
+    database too, neither of which belongs on a GET, and the vacancy is
+    already stored so there's no need to round-trip its text through the
+    client at all."""
+    if not _same_origin(request, require_header=True):
+        raise HTTPException(403, "Cross-origin form submission rejected")
     profile = _get_profile_or_404(session)
-    vacancy = _vacancy_from_params(title, company, url, description)
+    vacancy = get_vacancies_by_ids(session, [vacancy_id]).get(vacancy_id)
+    if vacancy is None:
+        raise HTTPException(404, "Vacancy not found")
+
     letter = generate_cover_letter(vacancy, profile)
-    return templates.TemplateResponse(
-        request,
-        "text_result.html",
-        {
-            "page_title": "Cover letter",
-            "vacancy_title": title,
-            "vacancy_company": company,
-            "vacancy_url": url,
-            "body_text": letter,
-        },
+    artifact = save_artifact(
+        session, vacancy_id, "cover_letter", letter, vacancy.title, vacancy.company, vacancy.url
     )
+    return RedirectResponse(url=f"/artifacts/{artifact.id}", status_code=303)
 
 
-@app.get("/tailoring-suggestions", response_class=HTMLResponse)
-def tailoring_suggestions(
-    request: Request,
-    title: str,
-    company: str,
-    url: str,
-    description: str,
-    session: Session = Depends(get_session),
-):
+@app.post("/vacancies/{vacancy_id}/tailoring-suggestions")
+def tailoring_suggestions(request: Request, vacancy_id: int, session: Session = Depends(get_session)):
+    """Same as cover_letter above, for resume-tailoring suggestions."""
+    if not _same_origin(request, require_header=True):
+        raise HTTPException(403, "Cross-origin form submission rejected")
     profile = _get_profile_or_404(session)
-    vacancy = _vacancy_from_params(title, company, url, description)
+    vacancy = get_vacancies_by_ids(session, [vacancy_id]).get(vacancy_id)
+    if vacancy is None:
+        raise HTTPException(404, "Vacancy not found")
+
     suggestions = suggest_resume_tailoring(vacancy, profile)
+    artifact = save_artifact(
+        session, vacancy_id, "tailoring_suggestions", suggestions, vacancy.title, vacancy.company, vacancy.url
+    )
+    return RedirectResponse(url=f"/artifacts/{artifact.id}", status_code=303)
+
+
+@app.get("/artifacts/{artifact_id}", response_class=HTMLResponse)
+def get_artifact(artifact_id: int, request: Request, session: Session = Depends(get_session)):
+    """Views a previously-generated, persisted cover letter or tailoring-
+    suggestions artifact - re-renders the saved text, no fresh LLM call.
+    Renders from the artifact's OWN vacancy_title/company/url snapshot,
+    not a live lookup against the current VacancyRecord - flagged by an
+    independent Codex review: re-ingestion overwrites those fields in
+    place on the vacancy row (title corrections, a changed posting URL),
+    so a letter viewed weeks later against the CURRENT record could
+    silently appear to be about a different company or link than what it
+    was actually written for. The snapshot is immune to that, and to the
+    vacancy row being deleted entirely (nothing in this codebase does
+    that today, but the artifact doesn't depend on it either way)."""
+    artifact = session.get(GeneratedArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(404, "Artifact not found")
+    page_title = (
+        "Cover letter" if artifact.artifact_type == "cover_letter" else "Resume tailoring suggestions"
+    )
     return templates.TemplateResponse(
         request,
         "text_result.html",
         {
-            "page_title": "Resume tailoring suggestions",
-            "vacancy_title": title,
-            "vacancy_company": company,
-            "vacancy_url": url,
-            "body_text": suggestions,
+            "page_title": page_title,
+            "vacancy_title": artifact.vacancy_title,
+            "vacancy_company": artifact.vacancy_company,
+            "vacancy_url": artifact.vacancy_url,
+            "body_text": artifact.content,
         },
     )
 
 
-def _same_origin(request: Request) -> bool:
-    """Lightweight CSRF mitigation for the state-changing POST below - the
-    API being loopback-only doesn't stop an arbitrary page open in the
-    user's own browser from POSTing here with a plain HTML form, since the
+def _same_origin(request: Request, *, require_header: bool = False) -> bool:
+    """Lightweight CSRF mitigation for state-changing POSTs - the API
+    being loopback-only doesn't stop an arbitrary page open in the user's
+    own browser from POSTing here with a plain HTML form, since the
     browser (not an attacker's server) makes the request. Browsers attach
     Origin - or, failing that, Referer - to cross-origin form submissions,
     so reject a request whose Origin/Referer names a different host:port
-    than this one. Neither header being present is allowed through rather
-    than rejected, since some legitimate same-origin requests (curl,
-    tests, privacy-hardened browsers) omit both. Flagged by an independent
-    Codex review."""
+    than this one.
+
+    require_header controls what happens when NEITHER header is present.
+    False (the default, used by the status-update endpoint) lets it
+    through, since some legitimate same-origin requests - curl, tests,
+    privacy-hardened browsers - omit both, and a wrong status update is
+    cheap to undo. True (used by the cover-letter/tailoring-suggestions
+    endpoints below) rejects it instead: those endpoints trigger a real,
+    paid LLM subprocess call and a DB write per POST, so failing open on
+    missing headers is a materially worse trade there. Flagged by an
+    independent Codex review of the original always-lenient version."""
     expected = request.url.netloc
     for header in ("origin", "referer"):
         value = request.headers.get(header)
         if value:
             return urlparse(value).netloc == expected
+    return not require_header
     return True
 
 
@@ -568,6 +602,7 @@ def applications_page(request: Request, session: Session = Depends(get_session))
     vacancies never show up here - see / for the semantic-match feed."""
     applications = list_applications(session)
     vacancies_by_id = get_vacancies_by_ids(session, [a.vacancy_id for a in applications])
+    artifacts_by_vacancy = list_artifacts_for_vacancies(session, [a.vacancy_id for a in applications])
 
     by_status: dict[str, list[dict]] = {s: [] for s in APPLICATION_STATUSES}
     for a in applications:
@@ -585,6 +620,7 @@ def applications_page(request: Request, session: Session = Depends(get_session))
                 "notes": a.notes,
                 "follow_up_at": a.follow_up_at,
                 "updated_at": a.updated_at,
+                "artifacts": artifacts_by_vacancy.get(a.vacancy_id, []),
             }
         )
 
