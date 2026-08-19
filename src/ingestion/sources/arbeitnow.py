@@ -22,8 +22,14 @@ _BLOCK_TAGS = {
 # Codex review: the original version had no notion of this, so a <style>
 # or <script> tag's raw CSS/JS body was appended to the extracted text
 # just like real content, reintroducing exactly the token-budget-wasting
-# noise this whole function exists to remove.
-_IGNORE_CONTENT_TAGS = {"script", "style"}
+# noise this whole function exists to remove. template/head added in a
+# follow-up round of the same review: a <template> tag's content is
+# never rendered by definition, and a <head>/<title> only shows up if
+# some source ever hands us a full HTML document rather than a fragment
+# - neither should count as the posting's visible text either.
+# Deliberately NOT blanket-ignoring noscript/iframe/svg - their content
+# can be conditionally or genuinely visible, unlike these four.
+_IGNORE_CONTENT_TAGS = {"script", "style", "template", "head"}
 
 
 class _TextExtractor(HTMLParser):
@@ -62,9 +68,19 @@ def _strip_html(raw: str) -> str:
     of actual job content. Unescape first (the response is HTML-entity-
     escaped on top of being HTML), then strip tags via the stdlib
     HTMLParser - no new dependency for what's ultimately just tag
-    stripping."""
+    stripping.
+
+    extractor.close() is required, not optional - flagged by an
+    independent Codex review: HTMLParser buffers trailing content it
+    hasn't fully parsed yet (an incomplete tag, or an entity reference
+    missing its terminating ";") in case more data is about to be fed,
+    and only flushes that buffer on close(). Without it, a description
+    ending mid-entity - confirmed live: `_strip_html("visible &amp")`
+    returned "" instead of "visible &" - could silently lose real
+    trailing content, or in the worst case the whole string."""
     extractor = _TextExtractor()
     extractor.feed(unescape(raw))
+    extractor.close()
     return " ".join("".join(extractor.chunks).split())
 
 

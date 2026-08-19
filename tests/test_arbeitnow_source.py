@@ -57,3 +57,25 @@ def test_strip_html_separates_table_cells():
         "&lt;td&gt;Django&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;"
     )
     assert _strip_html(raw) == "Python Django"
+
+
+def test_strip_html_does_not_drop_trailing_incomplete_content():
+    """Regression: a follow-up Codex review round found HTMLParser
+    buffers trailing content it hasn't fully parsed yet (an entity
+    reference missing its terminating ";") in case more data is about
+    to be fed, and only flushes that buffer on close() - without it, a
+    description ending mid-entity could silently lose real trailing
+    content, or the entire string. "visible &amp" without a trailing
+    ";" is exactly that case."""
+    assert _strip_html("visible &amp") == "visible &"
+
+
+def test_strip_html_discards_head_and_template_content():
+    """Regression: a follow-up Codex review round found <template>
+    (never rendered by definition) and <head>/<title> (only relevant if
+    a source ever hands us a full HTML document instead of a fragment)
+    still leaked into the extracted text."""
+    head = "&lt;head&gt;&lt;title&gt;hidden title&lt;/title&gt;&lt;/head&gt;&lt;p&gt;Visible&lt;/p&gt;"
+    template = "&lt;template&gt;hidden template&lt;/template&gt;&lt;p&gt;Visible&lt;/p&gt;"
+    assert _strip_html(head) == "Visible"
+    assert _strip_html(template) == "Visible"
