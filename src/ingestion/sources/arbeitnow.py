@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -84,6 +85,22 @@ def _strip_html(raw: str) -> str:
     return " ".join("".join(extractor.chunks).split())
 
 
+# Arbeitnow itself appends this to every description - not written by the
+# employer, just the platform's own footer. Confirmed live against all 192
+# real ingested Arbeitnow postings: 100% end in one of exactly 4 variants
+# ("Find Jobs in Germany on Arbeitnow", "Find more English Speaking Jobs in
+# United Kingdom on Arbeitnow", etc.) - country name varies, the "Find ...
+# Jobs in ... on Arbeitnow" shape doesn't. Deliberately narrow (letters/
+# spaces only for the country, anchored to the end of the string) rather
+# than a loose wildcard, so it can't accidentally eat real trailing content
+# that happens to mention "jobs" or a place name.
+_FOOTER_RE = re.compile(r"\s*Find(?: more [A-Za-z]+ Speaking)? Jobs in [A-Za-z ]+ on Arbeitnow\.?\s*$")
+
+
+def _strip_footer(text: str) -> str:
+    return _FOOTER_RE.sub("", text).strip()
+
+
 class ArbeitnowSource(VacancySource):
     """Thin adapter around the standalone arbeitnow-client library - maps
     its Job model onto career-copilot's internal Vacancy DTO. All the
@@ -108,7 +125,7 @@ class ArbeitnowSource(VacancySource):
             location=job.location,
             remote=job.remote,
             url=job.url,
-            description=_strip_html(job.description),
+            description=_strip_footer(_strip_html(job.description)),
             tags=job.tags,
             created_at=datetime.fromtimestamp(job.created_at) if job.created_at else None,
         )
