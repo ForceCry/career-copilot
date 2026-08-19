@@ -212,3 +212,28 @@ class GeneratedArtifact(SQLModel, table=True):
     vacancy_company: str
     vacancy_url: str = Field(sa_column=Column(Text))
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class IngestionRun(SQLModel, table=True):
+    """One row per ingest attempt for one source - written in two phases,
+    not append-only-and-done like ApplicationEvent/GeneratedArtifact: a
+    row is inserted when a run STARTS (ingestion_run_repo.start_run) and
+    updated in place when it FINISHES (finish_run), successfully or not.
+    That's deliberate - a run that crashes or gets killed mid-flight
+    (container OOM, a hung network call) still leaves a row with
+    finished_at still NULL, which is itself useful signal ("this run
+    seems stuck"), not something a single end-of-run INSERT could ever
+    show."""
+
+    __tablename__ = "ingestion_run"
+
+    id: int | None = Field(default=None, primary_key=True)
+    source: str = Field(index=True)
+    keywords: str = ""
+    location: str = ""
+    started_at: datetime = Field(default_factory=_utcnow)
+    finished_at: datetime | None = None
+    fetched_count: int | None = None
+    new_count: int | None = None
+    updated_count: int | None = None
+    error: str | None = Field(default=None, sa_column=Column(Text))

@@ -54,6 +54,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # In-stack alternative to wiring scripts/ingest.py into your own host
+  # crontab (still documented and fully supported - see the script's
+  # docstring). Opt-in via the "scheduler" Compose profile, not started
+  # by plain `docker compose up`: `docker compose --profile scheduler up
+  # -d`. Deliberately not on by default - this repo is public, and
+  # cloning it shouldn't silently start hitting Adzuna's rate-limited API
+  # or scraping justjoin.it on a schedule without an explicit decision to
+  # do that. Only needs MySQL (to write vacancies + ingestion_run rows)
+  # and RabbitMQ (to queue new ones for embedding) - not Elasticsearch or
+  # the embeddings service, which embedding-worker depends on instead.
+  scheduler:
+    build: .
+    command: ["supercronic", "/app/scheduler/crontab"]
+    profiles: ["scheduler"]
+    env_file:
+      - .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
   mysql:
     # Pinned rather than the `8` major-version tag: an independent Codex
     # review flagged that a floating tag means "docker compose pull" can

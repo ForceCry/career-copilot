@@ -552,6 +552,42 @@ def test_combined_feedback_adjustment_is_capped(client, session):
     assert recs[0]["score"] == 70
 
 
+def test_ingestion_runs_empty_when_none_recorded(client, session):
+    response = client.get("/ingestion-runs")
+    assert response.status_code == 200
+    assert response.json() == {"count": 0, "runs": []}
+
+
+def test_ingestion_runs_reports_recorded_runs(client, session):
+    from src.storage.ingestion_run_repo import finish_run, start_run
+    adzuna_run = start_run(session, "adzuna", "php,symfony", "Warsaw")
+    finish_run(session, adzuna_run.id, fetched_count=10, new_count=3, updated_count=7)
+    start_run(session, "arbeitnow", "php", "Warsaw")  # left unfinished on purpose
+
+    response = client.get("/ingestion-runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    by_source = {r["source"]: r for r in body["runs"]}
+    assert by_source["adzuna"]["new_count"] == 3
+    assert by_source["adzuna"]["finished_at"] is not None
+    assert by_source["arbeitnow"]["finished_at"] is None
+
+
+def test_ingestion_runs_filters_by_source(client, session):
+    from src.storage.ingestion_run_repo import start_run
+    start_run(session, "adzuna", "php", "Warsaw")
+    start_run(session, "arbeitnow", "php", "Warsaw")
+
+    response = client.get("/ingestion-runs", params={"source": "adzuna"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["runs"][0]["source"] == "adzuna"
+
+
 def test_applications_page_empty(client, session):
     response = client.get("/applications")
     assert response.status_code == 200

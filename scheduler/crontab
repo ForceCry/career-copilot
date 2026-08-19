@@ -1,0 +1,16 @@
+# Read by supercronic (see docker-compose.yml's opt-in `scheduler` service
+# and Dockerfile) - runs scripts/ingest.py on each source's own cadence
+# from inside the stack, instead of relying on the host's own crontab.
+# Same cadence documented in scripts/ingest.py's docstring, kept in sync
+# with it deliberately - that docstring is the source of truth for WHY
+# these specific intervals (Adzuna: fast, cheap, real rate limit budget
+# to spend. Arbeitnow: rate-limits hard. justjoin.it: slow, heavy, no
+# partner API). supercronic runs each job as the container's own
+# non-root user and logs to stdout - no root, no syslog, fits how
+# everything else in this stack already logs.
+#
+# plain `python`, not `.venv/bin/python` - there's no venv inside the
+# image, packages are installed directly (see Dockerfile).
+*/30 * * * * cd /app && python scripts/ingest.py --source adzuna
+0 * * * *    cd /app && python scripts/ingest.py --source arbeitnow
+0 6 * * *    cd /app && python scripts/ingest.py --source justjoinit

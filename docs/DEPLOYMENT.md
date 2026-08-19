@@ -57,7 +57,7 @@ that one.
 
 ## Loading job postings
 
-Nothing is fetched automatically. Run at least one source:
+Nothing is fetched automatically by default. Run at least one source:
 
 ```bash
 docker compose exec api python scripts/ingest.py --source arbeitnow
@@ -74,6 +74,26 @@ curl "http://localhost:8000/vacancies?keywords=php"
 If this comes back empty, ingest didn't find anything for that keyword
 — try a broader `--keywords` value on the ingest command, or check
 `docker compose logs embedding-worker` for errors.
+
+**Keeping it fresh going forward** — two options, either is fine, don't
+need both:
+
+- Your own host crontab, calling the same command on whatever cadence
+  you want — see `scripts/ingest.py`'s docstring for a ready-made
+  example (Adzuna every 30 min, Arbeitnow hourly, justjoin.it daily).
+- The opt-in `scheduler` service, which runs that exact same cadence
+  from inside the stack itself via `supercronic` — not started by plain
+  `docker compose up`, since a public repo shouldn't silently start
+  hitting a rate-limited API or scraping a site on a schedule the moment
+  someone clones it:
+  ```bash
+  docker compose --profile scheduler up -d
+  ```
+
+Either way, every ingest run — scheduled or run by hand — is recorded to
+`GET /ingestion-runs` (optionally `?source=adzuna`), so a source that's
+started erroring or silently returning nothing is visible without
+digging through container logs.
 
 ## Setting up your own profile
 

@@ -35,6 +35,7 @@ from .storage.application_repo import (  # noqa: E402
 )
 from .storage.artifact_repo import list_artifacts_for_vacancies, save_artifact  # noqa: E402
 from .storage.db import engine, get_session, init_db  # noqa: E402
+from .storage.ingestion_run_repo import list_runs  # noqa: E402
 from .storage.models import (  # noqa: E402
     APPLICATION_STATUSES,
     NEGATIVE_APPLICATION_STATUSES,
@@ -136,6 +137,39 @@ def vacancies(
     source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
     results = query_vacancies(session, keyword_list, source_list)
     return {"count": len(results), "vacancies": [v.model_dump() for v in results]}
+
+
+@app.get("/ingestion-runs")
+def ingestion_runs(
+    source: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    session: Session = Depends(get_session),
+):
+    """History of scripts/ingest.py invocations - whether triggered by
+    the opt-in in-stack `scheduler` service, your own external cron, or
+    run by hand. `finished_at`/`error` still null means the run either
+    hasn't finished yet or crashed without a chance to record why (a
+    killed process, an unhandled signal) - either way, worth a look if
+    it's been a while."""
+    runs = list_runs(session, source=source, limit=limit)
+    return {
+        "count": len(runs),
+        "runs": [
+            {
+                "id": r.id,
+                "source": r.source,
+                "keywords": r.keywords,
+                "location": r.location,
+                "started_at": r.started_at,
+                "finished_at": r.finished_at,
+                "fetched_count": r.fetched_count,
+                "new_count": r.new_count,
+                "updated_count": r.updated_count,
+                "error": r.error,
+            }
+            for r in runs
+        ],
+    }
 
 
 def _compute_recommendations(

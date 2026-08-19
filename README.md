@@ -26,7 +26,10 @@ agent rather than prose for a person.
 ## Features
 
 - **Multi-source ingestion** — Adzuna, Arbeitnow, justjoin.it, each as an
-  independently reusable client library (`libs/`), not tied to this app
+  independently reusable client library (`libs/`), not tied to this app,
+  with an opt-in in-stack scheduler (`supercronic`, off by default) and a
+  history of every run (`GET /ingestion-runs`) if you'd rather not
+  babysit an external crontab
 - **Semantic ranking** — Elasticsearch kNN vector search against your
   profile, not keyword matching
 - **Optional LLM reranking** — the top shortlist gets scored for fit an
@@ -53,7 +56,7 @@ agent rather than prose for a person.
 - **Production-shaped, not a toy** — Alembic migrations, structured
   JSON logging, Prometheus/Grafana monitoring (10-panel dashboard,
   provisioned out of the box), non-root containers, CI across every
-  package, 151 automated tests
+  package, 162 automated tests
 
 ## Tech stack
 
