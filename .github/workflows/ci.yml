@@ -17,7 +17,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: |
+          pip install -r requirements-dev.txt
+          # tests/test_ingest_script.py imports scripts/ingest.py directly,
+          # which at module level imports AdzunaSource/ArbeitnowSource/
+          # JustJoinItSource - each needing its own libs/*-client package
+          # installed, same as the Dockerfile's `pip install /libs/...`.
+          # Previously nothing under tests/ imported scripts/ingest.py at
+          # all, so this was never needed here; broke CI the moment that
+          # changed (confirmed live via a real failed run on this repo).
+          pip install ./libs/adzuna-client ./libs/arbeitnow-client ./libs/justjoinit-scraper
 
       - name: Lint (ruff)
         run: ruff check .
