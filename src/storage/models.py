@@ -118,6 +118,24 @@ class VacancyRecord(SQLModel, table=True):
     salary_is_predicted: bool = False
     first_seen_at: datetime = Field(default_factory=_utcnow)
     last_seen_at: datetime = Field(default_factory=_utcnow)
+    # Ground truth for "is this vacancy still actually there" - "active"
+    # while the source keeps returning it, "stale" once it's been absent
+    # from a source's own successful ingestion runs for a while (still
+    # shown, with a badge - could be transient), "removed" once absent for
+    # long enough to be confident it's genuinely gone. Deliberately NOT
+    # derived from last_seen_at's wall-clock age at query time (the prior
+    # approach) - that can't tell "the source stopped listing this" apart
+    # from "our own ingestion was paused for a few days", which is exactly
+    # what happened in practice. See vacancy_repo.mark_missing_vacancies
+    # for how this actually gets updated - only on a source's own
+    # successfully-completed run, never inferred from time alone.
+    status: str = Field(default="active", index=True)
+    # Consecutive ingestion runs, for this vacancy's own source, that
+    # completed successfully without this vacancy appearing in the
+    # results - reset to 0 the moment it reappears. Runs that errored
+    # don't count either way (see mark_missing_vacancies) - an
+    # incomplete/failed fetch isn't evidence the vacancy is gone.
+    missed_run_count: int = 0
     # NULL means "not confirmed queued for embedding yet" - set only after
     # RabbitMQ actually confirms receiving the publish (see
     # messaging/rabbitmq.py), not just after upsert_vacancies decides it
