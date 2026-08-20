@@ -14,3 +14,11 @@
 */30 * * * * cd /app && python scripts/ingest.py --source adzuna
 0 * * * *    cd /app && python scripts/ingest.py --source arbeitnow
 0 6 * * *    cd /app && python scripts/ingest.py --source justjoinit
+15 * * * *   cd /app && python scripts/ingest.py --source dou
+
+# Weekly, not daily - this only touches vacancies already 90+ days old
+# and confirmed "removed" (see storage/vacancy_repo.py's status field),
+# so there's no real urgency, and --execute actually deletes rows -
+# less frequent means less exposure if the removed-status logic itself
+# ever has a bug.
+0 3 * * 0    cd /app && python scripts/cleanup_removed_vacancies.py --execute

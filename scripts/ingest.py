@@ -2,19 +2,22 @@
 
 Each source is its own command, on purpose - they have very different
 cost/speed profiles (Adzuna: one fast API call. Arbeitnow: rate-limited,
-needs delay. justjoin.it: tens of seconds and tens of MB per run), so
-coupling them to one schedule would force the cheap ones to wait on the
-expensive one.
+needs delay. justjoin.it: tens of seconds and tens of MB per run. DOU.ua:
+one fast RSS fetch, but only ever returns the ~25 latest postings for its
+category - see libs/dou-client's README), so coupling them to one
+schedule would force the cheap ones to wait on the expensive one.
 
 Run:
   .venv/bin/python scripts/ingest.py --source adzuna
   .venv/bin/python scripts/ingest.py --source arbeitnow
   .venv/bin/python scripts/ingest.py --source justjoinit --keywords php,symfony
+  .venv/bin/python scripts/ingest.py --source dou
 
 Cron example (adjust paths):
   */30 * * * *  cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source adzuna
   0 * * * *     cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source arbeitnow
   0 6 * * *     cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source justjoinit
+  15 * * * *    cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source dou
 
 Or skip your own host cron entirely: `docker compose --profile scheduler up
 -d` runs this same cadence from inside the stack itself, via the opt-in
@@ -40,12 +43,17 @@ from sqlmodel import Session  # noqa: E402
 
 from src.ingestion.sources.adzuna import AdzunaSource  # noqa: E402
 from src.ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
+from src.ingestion.sources.dou import DouSource  # noqa: E402
 from src.ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
 from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
 from src.observability import configure_logging  # noqa: E402
 from src.storage.db import engine, init_db  # noqa: E402
 from src.storage.ingestion_run_repo import finish_run, start_run  # noqa: E402
-from src.storage.vacancy_repo import mark_embedding_queued, upsert_vacancies  # noqa: E402
+from src.storage.vacancy_repo import (  # noqa: E402
+    mark_embedding_queued,
+    mark_missing_vacancies,
+    upsert_vacancies,
+)
 
 logger = logging.getLogger("ingest")
 
@@ -53,6 +61,7 @@ SOURCES = {
     "adzuna": AdzunaSource,
     "arbeitnow": ArbeitnowSource,
     "justjoinit": JustJoinItSource,
+    "dou": DouSource,
 }
 
 
@@ -112,6 +121,20 @@ def main() -> None:
             "upserted vacancies",
             extra={"source": args.source, "new": new_count, "updated": updated_count},
         )
+
+        # Only reached once fetch() has already succeeded (an exception
+        # there skips straight to the except block below) - see
+        # mark_missing_vacancies' docstring for why that matters: a
+        # failed/partial fetch must never count as "the source confirmed
+        # these vacancies are gone."
+        with Session(engine) as session:
+            newly_removed = mark_missing_vacancies(
+                session, args.source, {v.external_id for v in vacancies}
+            )
+        if newly_removed:
+            logger.info(
+                "vacancies marked removed", extra={"source": args.source, "count": newly_removed}
+            )
 
         try:
             confirmed_ids = publish_vacancy_ids(to_embed_ids)

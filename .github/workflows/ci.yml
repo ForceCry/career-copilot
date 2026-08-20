@@ -21,12 +21,13 @@ jobs:
           pip install -r requirements-dev.txt
           # tests/test_ingest_script.py imports scripts/ingest.py directly,
           # which at module level imports AdzunaSource/ArbeitnowSource/
-          # JustJoinItSource - each needing its own libs/*-client package
-          # installed, same as the Dockerfile's `pip install /libs/...`.
-          # Previously nothing under tests/ imported scripts/ingest.py at
-          # all, so this was never needed here; broke CI the moment that
-          # changed (confirmed live via a real failed run on this repo).
-          pip install ./libs/adzuna-client ./libs/arbeitnow-client ./libs/justjoinit-scraper
+          # JustJoinItSource/DouSource - each needing its own libs/*-client
+          # package installed, same as the Dockerfile's `pip install
+          # /libs/...`. Previously nothing under tests/ imported
+          # scripts/ingest.py at all, so this was never needed here; broke
+          # CI the moment that changed (confirmed live via a real failed
+          # run on this repo).
+          pip install ./libs/adzuna-client ./libs/arbeitnow-client ./libs/justjoinit-scraper ./libs/dou-client
 
       - name: Lint (ruff)
         run: ruff check .
@@ -81,6 +82,27 @@ jobs:
     defaults:
       run:
         working-directory: libs/justjoinit-scraper
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test
+        run: pytest tests/ -v
+
+  dou-client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: libs/dou-client
     steps:
       - uses: actions/checkout@v4
 

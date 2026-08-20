@@ -54,7 +54,8 @@ RUN case "${TARGETARCH}" in \
 COPY libs/adzuna-client /libs/adzuna-client
 COPY libs/arbeitnow-client /libs/arbeitnow-client
 COPY libs/justjoinit-scraper /libs/justjoinit-scraper
-RUN pip install --no-cache-dir /libs/adzuna-client /libs/arbeitnow-client /libs/justjoinit-scraper
+COPY libs/dou-client /libs/dou-client
+RUN pip install --no-cache-dir /libs/adzuna-client /libs/arbeitnow-client /libs/justjoinit-scraper /libs/dou-client
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
