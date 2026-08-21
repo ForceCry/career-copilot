@@ -46,13 +46,14 @@
     gap: 8px;
     margin-bottom: 20px;
   }
-  form.search input[type=text], form.search input[type=number] {
+  form.search input[type=text], form.search input[type=number], form.search select {
     padding: 6px 8px;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: transparent;
     color: inherit;
   }
+  form.search select[multiple] { min-width: 130px; }
   form.search label { font-size: 0.78rem; color: var(--muted); display: block; margin-bottom: 2px; }
   form.search button {
     padding: 7px 16px;
@@ -141,8 +142,12 @@
 
 <form class="search" method="get" action="/">
   <div>
-    <label>Sources (blank = all)</label>
-    <input type="text" name="sources" value="{{ sources }}" placeholder="adzuna,arbeitnow,justjoinit">
+    <label>Sources (none selected = all)</label>
+    <select name="sources" multiple size="3">
+      {% for src in available_sources %}
+      <option value="{{ src }}" {% if src in sources %}selected{% endif %}>{{ src }}</option>
+      {% endfor %}
+    </select>
   </div>
   <div>
     <label>Top K (vector search)</label>
@@ -174,9 +179,22 @@
           {% if rec.application_status %}<span class="badge">{{ rec.application_status }}</span>{% endif %}
         </div>
         <div class="rec-meta">{{ rec.company }}</div>
-        {% if rec.salary_min %}
+        {% if rec.salary_min or rec.salary_max %}
         <div class="rec-meta">
-          {{ "{:,.0f}".format(rec.salary_min) }}&ndash;{{ "{:,.0f}".format(rec.salary_max) }}
+          {# An independent Codex review found the previous version only rendered
+             when salary_min was set, silently hiding an upper-bound-only figure
+             (DOU's "до $X" - "up to $X") entirely - and, confirmed live, would
+             have crashed the page outright on a lower-bound-only figure (DOU's
+             "від $X" - "from $X"): "{:,.0f}".format(None) raises TypeError, and
+             salary_min alone being truthy was enough to reach that format call
+             on a None salary_max. #}
+          {% if rec.salary_min and rec.salary_max %}
+            {{ "{:,.0f}".format(rec.salary_min) }}&ndash;{{ "{:,.0f}".format(rec.salary_max) }}
+          {% elif rec.salary_min %}
+            from {{ "{:,.0f}".format(rec.salary_min) }}
+          {% else %}
+            up to {{ "{:,.0f}".format(rec.salary_max) }}
+          {% endif %}
           {{ rec.salary_currency }}{% if rec.salary_period %}/{{ rec.salary_period }}{% endif %}
           {% if rec.salary_is_predicted %}(estimated){% endif %}
         </div>
@@ -212,7 +230,7 @@
         <button type="submit">Tailor resume</button>
       </form>
       <form method="post" action="/vacancies/{{ rec.vacancy_id }}/status" class="status-form">
-        <input type="hidden" name="redirect_to" value="/?sources={{ sources | urlencode }}&min_score={{ min_score }}&top_k={{ top_k }}&llm_rerank_top_n={{ llm_rerank_top_n }}">
+        <input type="hidden" name="redirect_to" value="/?{% for src in sources %}sources={{ src | urlencode }}&{% endfor %}min_score={{ min_score }}&top_k={{ top_k }}&llm_rerank_top_n={{ llm_rerank_top_n }}">
         <select name="status" required>
           <option value="" disabled {% if not rec.application_status %}selected{% endif %}>Set status…</option>
           {% for s in application_statuses %}

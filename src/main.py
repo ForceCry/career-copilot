@@ -79,6 +79,32 @@ configure_logging()
 # that's gone quiet for multiple missed cycles.
 RECOMMENDATION_STALE_AFTER = timedelta(days=5)
 
+# The ingestion adapters registered in src/ingestion/sources/ - see each
+# source's `name` class attribute. Listed here (rather than derived from
+# the DB at request time) purely to populate the sources filter dropdown;
+# adding another adapter means adding it here too.
+AVAILABLE_SOURCES = ("adzuna", "arbeitnow", "justjoinit", "dou")
+
+
+def _normalize_sources(raw: list[str]) -> list[str]:
+    """Filters a query-param `sources` list down to known adapter names -
+    flagged by an independent Codex review: passed through unvalidated, a
+    typo or a stale bookmark from before `sources` switched from a comma-
+    separated string to repeated params (e.g. `?sources=adzuna,arbeitnow`,
+    now a single unknown value) silently applied as an active filter,
+    usually producing an inexplicable empty result set that looks like
+    "no matches" rather than "bad filter value". Also splits any
+    comma-containing entry, so old bookmarks in that format keep working.
+    Unknown values are dropped silently rather than erroring - this is a
+    dropdown-driven filter, not a validated API contract."""
+    split = [part.strip() for item in raw for part in item.split(",")]
+    seen: list[str] = []
+    for source in split:
+        if source in AVAILABLE_SOURCES and source not in seen:
+            seen.append(source)
+    return seen
+
+
 app = FastAPI(title="career-copilot")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -175,13 +201,12 @@ def ingestion_runs(
 def _compute_recommendations(
     session: Session,
     profile: Profile,
-    sources: str,
+    sources: list[str],
     min_score: int,
     top_k: int,
     llm_rerank_top_n: int,
 ) -> tuple[list, dict[int, Vacancy], dict[int, Application]]:
-    source_list = [s.strip() for s in sources.split(",") if s.strip()] or None
-    hits = vector_search(profile, k=top_k, sources=source_list)
+    hits = vector_search(profile, k=top_k, sources=sources or None)
 
     hit_ids = [h["vacancy_id"] for h in hits]
     vacancies_by_id = get_vacancies_by_ids(session, hit_ids)
@@ -281,7 +306,7 @@ def _compute_recommendations(
 
 @app.get("/recommendations")
 def recommendations(
-    sources: str = "",
+    sources: list[str] = Query(default=[]),
     min_score: int = Query(0, ge=0, le=100),
     # Unbounded top_k/llm_rerank_top_n let a caller force oversized kNN
     # requests or trigger many Claude subprocess calls per request -
@@ -298,7 +323,7 @@ def recommendations(
         raise HTTPException(404, "No profile seeded yet - run scripts/seed_profile.py")
 
     matches, _, _ = _compute_recommendations(
-        session, profile, sources, min_score, top_k, llm_rerank_top_n
+        session, profile, _normalize_sources(sources), min_score, top_k, llm_rerank_top_n
     )
     return {"count": len(matches), "recommendations": [m.model_dump() for m in matches]}
 
@@ -306,7 +331,7 @@ def recommendations(
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
-    sources: str = "",
+    sources: list[str] = Query(default=[]),
     min_score: int = Query(0, ge=0, le=100),
     top_k: int = Query(20, ge=1, le=100),
     llm_rerank_top_n: int = Query(0, ge=0, le=10),
@@ -315,6 +340,7 @@ def index(
     profile = session.exec(select(Profile).order_by(Profile.id)).first()
     recommendations_ctx = []
     error = None
+    sources = _normalize_sources(sources)
 
     if not profile:
         error = "No profile seeded yet — run scripts/seed_profile.py"
@@ -359,6 +385,7 @@ def index(
             "profile": profile,
             "recommendations": recommendations_ctx,
             "sources": sources,
+            "available_sources": AVAILABLE_SOURCES,
             "min_score": min_score,
             "top_k": top_k,
             "llm_rerank_top_n": llm_rerank_top_n,
