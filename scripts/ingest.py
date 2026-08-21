@@ -4,20 +4,24 @@ Each source is its own command, on purpose - they have very different
 cost/speed profiles (Adzuna: one fast API call. Arbeitnow: rate-limited,
 needs delay. justjoin.it: tens of seconds and tens of MB per run. DOU.ua:
 one fast RSS fetch, but only ever returns the ~25 latest postings for its
-category - see libs/dou-client's README), so coupling them to one
-schedule would force the cheap ones to wait on the expensive one.
+category - see libs/dou-client's README. Djinni: no bulk endpoint, one
+full page fetch per posting on top of the listing pages needed just to
+discover them - see libs/djinni-scraper's README), so coupling them to
+one schedule would force the cheap ones to wait on the expensive one.
 
 Run:
   .venv/bin/python scripts/ingest.py --source adzuna
   .venv/bin/python scripts/ingest.py --source arbeitnow
   .venv/bin/python scripts/ingest.py --source justjoinit --keywords php,symfony
   .venv/bin/python scripts/ingest.py --source dou
+  .venv/bin/python scripts/ingest.py --source djinni
 
 Cron example (adjust paths):
   */30 * * * *  cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source adzuna
   0 * * * *     cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source arbeitnow
   0 6 * * *     cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source justjoinit
   15 * * * *    cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source dou
+  0 */4 * * *   cd /path/to/career-copilot && .venv/bin/python scripts/ingest.py --source djinni
 
 Or skip your own host cron entirely: `docker compose --profile scheduler up
 -d` runs this same cadence from inside the stack itself, via the opt-in
@@ -43,6 +47,7 @@ from sqlmodel import Session  # noqa: E402
 
 from src.ingestion.sources.adzuna import AdzunaSource  # noqa: E402
 from src.ingestion.sources.arbeitnow import ArbeitnowSource  # noqa: E402
+from src.ingestion.sources.djinni import DjinniSource  # noqa: E402
 from src.ingestion.sources.dou import DouSource  # noqa: E402
 from src.ingestion.sources.justjoinit import JustJoinItSource  # noqa: E402
 from src.messaging.rabbitmq import publish_vacancy_ids  # noqa: E402
@@ -62,6 +67,7 @@ SOURCES = {
     "arbeitnow": ArbeitnowSource,
     "justjoinit": JustJoinItSource,
     "dou": DouSource,
+    "djinni": DjinniSource,
 }
 
 

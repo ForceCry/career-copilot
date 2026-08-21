@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "djinni-scraper"
+version = "0.1.0"
+description = "Scraper for djinni.co's public job listings"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff==0.16.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/djinni_scraper"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

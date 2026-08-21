@@ -83,7 +83,7 @@ RECOMMENDATION_STALE_AFTER = timedelta(days=5)
 # source's `name` class attribute. Listed here (rather than derived from
 # the DB at request time) purely to populate the sources filter dropdown;
 # adding another adapter means adding it here too.
-AVAILABLE_SOURCES = ("adzuna", "arbeitnow", "justjoinit", "dou")
+AVAILABLE_SOURCES = ("adzuna", "arbeitnow", "justjoinit", "dou", "djinni")
 
 
 def _normalize_sources(raw: list[str]) -> list[str]:

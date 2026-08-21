@@ -241,3 +241,30 @@ def test_a_seen_vacancy_is_excluded_from_missing_by_external_id(session):
     record = session.get(VacancyRecord, ids[0])
     assert record.missed_run_count == 0
     assert record.status == "active"
+
+
+def test_every_registered_source_has_explicit_missed_run_thresholds():
+    """Regression: DOU was originally left out of both threshold dicts
+    entirely - caught while building Djinni's thresholds and going back
+    to check the others, not by a review of DOU itself. Without an entry
+    here, a source silently falls back to _status_for_missed_count's
+    generic default (1/3), which is only correct for sources checked
+    roughly daily - DOU runs hourly, so that default would have marked
+    every DOU posting "removed" after 3 missed hourly runs (3 hours)
+    instead of the ~3-day window every other source actually gets. This
+    doesn't re-verify the specific numbers (see the module-level comment
+    for why each one is what it is), just that nothing gets silently
+    left on the generic fallback.
+
+    Reads the source list from scripts/ingest.py's own SOURCES registry
+    (same import pattern tests/test_ingest_script.py already uses) rather
+    than a hardcoded tuple here - flagged by an independent Codex review:
+    a hardcoded list would keep passing even if a future new source got
+    registered in ingest.py but forgotten in these threshold dicts,
+    exactly the gap this test exists to catch."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import ingest
+
+    for source in ingest.SOURCES:
+        assert source in STALE_AFTER_MISSED_RUNS, source
+        assert source in REMOVED_AFTER_MISSED_RUNS, source
